@@ -20,7 +20,9 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 
 Install the package with r2modman/Thunderstore Mod Manager, or extract the contents into the Valheim game directory so the DLL is under `BepInEx/plugins`.
 
-Launch once, then edit `BepInEx/config/Swmarly.ValheimQOL.cfg`. Every feature is enabled by default. The sleep-vote feature must be installed on both the server and clients in multiplayer.
+For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting uses the server for the decision and clients for the vote popup, while equipment-in-water, running hotbar equipment, and the currency-pocket UI require the client copy.
+
+Every feature is enabled by default.
 
 Do not install duplicate copies of the individual mods at the same time. Their overlapping patches can cancel each other out.
 
