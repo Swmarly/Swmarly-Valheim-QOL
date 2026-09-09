@@ -1,0 +1,11 @@
+[package]
+namespace = "Swmarly"
+name = "SwmarlyValheimQOL"
+
+[build]
+icon = "thunderstore/icon.png"
+readme = "thunderstore/README.md"
+
+[publish]
+repository = "https://thunderstore.io"
+communities = ["valheim"]

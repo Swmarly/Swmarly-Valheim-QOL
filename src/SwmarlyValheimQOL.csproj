@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>SwmarlyValheimQOL</AssemblyName>
+    <RootNamespace>SwmarlyValheimQOL</RootNamespace>
+    <Version>1.0.0</Version>
+    <OutputPath>bin/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+</Project>
