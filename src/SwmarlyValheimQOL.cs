@@ -13,13 +13,11 @@ using Object = UnityEngine.Object;
 namespace SwmarlyValheimQOL;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
-[BepInProcess("valheim.exe")]
-[BepInProcess("valheim.x86_64")]
 public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.0";
+    public const string PluginVersion = "1.0.1";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -84,7 +82,7 @@ public sealed class Plugin : BaseUnityPlugin
         Instance = this;
         BindConfig();
         Harmony.PatchAll(typeof(Plugin).Assembly);
-        Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0.");
+        Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
     }
 
     private void BindConfig()
@@ -178,32 +176,23 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static void CreatePocketUi(InventoryGui gui)
     {
-        if (!IsFeatureEnabled(CurrencyPocket) || PocketUi != null || gui == null || gui.m_player == null) return;
+        if (!IsFeatureEnabled(CurrencyPocket) || gui == null || gui.m_player == null) return;
         Transform inventoryRoot = gui.m_player.transform;
         Transform armor = inventoryRoot.Find("Armor");
         Transform weight = inventoryRoot.Find("Weight");
         if (armor == null) return;
 
-        PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
-        PocketUi.name = "SwmarlyValheimQOL_CurrencyPocket";
-        RectTransform pocketRect = PocketUi.GetComponent<RectTransform>();
-        RectTransform armorRect = armor.GetComponent<RectTransform>();
-        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
-        if (pocketRect != null && armorRect != null)
+        if (PocketUi != null)
         {
-            pocketRect.anchoredPosition = weightRect == null
-                ? armorRect.anchoredPosition + new Vector2(0f, -42f)
-                : new Vector2(armorRect.anchoredPosition.x, (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
+            RepositionPocketUi(inventoryRoot, armor, weight);
+            SetPocketIcon();
+            return;
         }
 
-        Transform icon = PocketUi.transform.Find("armor_icon");
-        GameObject coins = ObjectDB.instance == null ? null : ObjectDB.instance.GetItemPrefab(CoinPrefab);
-        if (icon != null && coins != null)
-        {
-            Image image = icon.GetComponent<Image>();
-            ItemDrop drop = coins.GetComponent<ItemDrop>();
-            if (image != null && drop != null) image.sprite = drop.m_itemData.GetIcon();
-        }
+        PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
+        PocketUi.name = "SwmarlyValheimQOL_CurrencyPocket";
+        RepositionPocketUi(inventoryRoot, armor, weight);
+        SetPocketIcon();
         PocketText = PocketUi.transform.Find("ac_text")?.GetComponent<TextMeshProUGUI>();
         if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
 
@@ -219,6 +208,39 @@ public sealed class Plugin : BaseUnityPlugin
             PocketExtractButton.onClick = new Button.ButtonClickedEvent();
             PocketExtractButton.onClick.AddListener(ExtractPocketCoins);
         }
+    }
+
+    private static void RepositionPocketUi(Transform inventoryRoot, Transform armor, Transform weight)
+    {
+        RectTransform pocketRect = PocketUi == null ? null : PocketUi.GetComponent<RectTransform>();
+        RectTransform armorRect = armor.GetComponent<RectTransform>();
+        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
+        if (pocketRect == null || armorRect == null) return;
+
+        // Keep the pocket in the same UI layer as Armor and place it in the
+        // empty slot between Armor and Weight. Setting the sibling index is
+        // important when another inventory mod adds its own number text.
+        pocketRect.SetSiblingIndex(armor.GetSiblingIndex());
+        pocketRect.anchoredPosition = weightRect == null
+            ? armorRect.anchoredPosition + new Vector2(0f, -48f)
+            : new Vector2(armorRect.anchoredPosition.x, (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
+
+        // Quick-stack/Jewelcrafting-style layouts move the Armor and Weight
+        // rows after InventoryGui.Show. Keep the pocket out of their overlay.
+        var plugins = BepInEx.Bootstrap.Chainloader.PluginInfos;
+        if (plugins.ContainsKey("goldenrevolver.quick_stack_store") || plugins.ContainsKey("org.bepinex.plugins.jewelcrafting"))
+            pocketRect.anchoredPosition += new Vector2(0f, -234f);
+    }
+
+    private static void SetPocketIcon()
+    {
+        if (PocketUi == null || ObjectDB.instance == null) return;
+        Transform icon = PocketUi.transform.Find("armor_icon");
+        GameObject coins = ObjectDB.instance.GetItemPrefab(CoinPrefab);
+        if (icon == null || coins == null) return;
+        Image image = icon.GetComponent<Image>();
+        ItemDrop drop = coins.GetComponent<ItemDrop>();
+        if (image != null && drop != null) image.sprite = drop.m_itemData.GetIcon();
     }
 }
 
@@ -262,9 +284,14 @@ internal static class EquipWhileRunningPatch
 {
     private static bool Prefix(Player __instance, int index)
     {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !__instance.IsRunning()) return true;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !__instance.IsRunning()) return true;
         ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
-        return item == null || !item.IsEquipable();
+        if (item == null) return true;
+
+        // Do the hotbar action directly while running. This bypasses any vanilla
+        // movement-state gate added around UseHotbarItem in a game update.
+        __instance.UseItem(__instance.GetInventory(), item, false);
+        return false;
     }
 }
 
@@ -406,6 +433,15 @@ internal static class CurrencyUiPatch
         if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) return;
         Plugin.CreatePocketUi(__instance);
         Plugin.UpdatePocketUi();
+    }
+}
+
+[HarmonyPatch(typeof(InventoryGui), "Awake")]
+internal static class CurrencyUiAwakePatch
+{
+    private static void Postfix(InventoryGui __instance)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) Plugin.CreatePocketUi(__instance);
     }
 }
 
@@ -587,4 +623,3 @@ internal static class SleepSkipPatch
         return false;
     }
 }
-
