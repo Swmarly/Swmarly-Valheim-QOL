@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4
+
+- Fixed dedicated-server chest opening by preserving Valheim's native open RPC and disabling only the in-use rejection for supported containers.
+- Added a guarded GUI ownership fallback and hardened the chest GUI transpiler for Valheim 1.0.
+- Fixed null inventory-owner handling that could break chest item transactions.
+
 ## 1.0.3
 
 - Added configurable eternal fuel for native campfires, hearths, braziers, torches, and other `Fireplace` pieces using the synchronized ZDO fuel value.
