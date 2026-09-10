@@ -984,60 +984,50 @@ internal static class EquipWhileRunningPatch
     }
 }
 
-[HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipmentInWaterEquipPatch
+// The reference UseEquipmentInWater implementation does not rewrite the
+// equipment methods. Valheim's equipment code reaches IsSwimming through
+// several internal paths, and a call-site transpiler misses those paths on
+// some 1.0 builds. Instead, intercept only IsSwimming calls whose stack is
+// currently inside EquipItem or UpdateEquipment. Movement, stamina, drowning
+// and animation callers still receive the native swimming result.
+[HarmonyPatch(typeof(Character), nameof(Character.IsSwimming))]
+internal static class EquipmentInWaterSwimmingPatch
 {
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    private static bool Prefix(Character __instance, float ___m_swimTimer, ref bool __result)
     {
-        return EquipmentInWaterTranspiler.ReplaceSwimmingChecks(instructions);
-    }
-}
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance == null ||
+            !__instance.IsPlayer() || ___m_swimTimer >= 0.5f)
+            return true;
 
-[HarmonyPatch(typeof(Humanoid), "UpdateEquipment")]
-internal static class EquipmentInWaterUpdatePatch
-{
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-    {
-        return EquipmentInWaterTranspiler.ReplaceSwimmingChecks(instructions);
-    }
-}
-
-internal static class EquipmentInWaterTranspiler
-{
-    private static readonly MethodInfo NativeIsSwimming = AccessTools.Method(typeof(Character), "IsSwimming");
-    private static readonly MethodInfo EquipmentIsSwimming = AccessTools.Method(typeof(EquipmentInWaterTranspiler), nameof(IsSwimmingForEquipment));
-
-    internal static IEnumerable<CodeInstruction> ReplaceSwimmingChecks(IEnumerable<CodeInstruction> instructions)
-    {
-        List<CodeInstruction> code = instructions.ToList();
-        int replacements = 0;
-        foreach (CodeInstruction instruction in code)
+        StackTrace stack = new();
+        for (int i = 2; i < stack.FrameCount && i < 10; i++)
         {
-            if ((instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt) &&
-                instruction.operand is MethodInfo method && NativeIsSwimming != null &&
-                EquipmentIsSwimming != null && method.Name == NativeIsSwimming.Name &&
-                method.GetParameters().Length == 0 && method.ReturnType == typeof(bool))
+            string methodName = stack.GetFrame(i)?.GetMethod()?.Name ?? string.Empty;
+            if (methodName == "EquipItem" || methodName == "UpdateEquipment")
             {
-                instruction.opcode = OpCodes.Call;
-                instruction.operand = EquipmentIsSwimming;
-                replacements++;
+                __result = false;
+                return false;
             }
         }
 
-        if (replacements == 0)
-            Plugin.LogWarning("Equipment in water: no IsSwimming call was found in an equipment method on this Valheim build.");
-        return code;
+        return true;
     }
+}
 
-    // This helper is only injected at the two equipment call sites. It does
-    // not patch Character.IsSwimming globally, so swimming movement, drowning,
-    // swimming stamina and animation state keep their native behavior.
-    private static bool IsSwimmingForEquipment(Character character)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) && character is Player)
-            return false;
-        return character != null && character.IsSwimming();
-    }
+// These empty compatibility patches are intentional. The reference mod uses
+// them to keep Harmony's equipment patch chain compatible with other mods;
+// target the Valheim 1.0 EquipItem overload explicitly so it cannot become a
+// second ambiguous Harmony target.
+[HarmonyPatch(typeof(Humanoid), nameof(Humanoid.EquipItem), new[] { typeof(ItemDrop.ItemData), typeof(bool) })]
+internal static class EquipmentInWaterEquipCompatibilityPatch
+{
+    private static void Prefix() { }
+}
+
+[HarmonyPatch(typeof(Humanoid), nameof(Humanoid.UpdateEquipment))]
+internal static class EquipmentInWaterUpdateCompatibilityPatch
+{
+    private static void Prefix() { }
 }
 
 [HarmonyPatch(typeof(Player), "UseStamina")]
