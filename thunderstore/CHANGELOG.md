@@ -9,12 +9,11 @@
 - Added No-Chest-Block/MultiUserChest-style simultaneous chest opening and stack acknowledgment.
 - Added SpeedyPaths-style ground detection, movement multipliers, and configurable no-stamina dirt/stone paths.
 - Added dedicated-server NoAFKRaids protection based on authoritative player movement positions.
-- Replaced the running-equipment patch with a transaction-scoped `UseHotbarItem`/`Character.IsRunning` bypass and support for both `call` and `callvirt` Valheim IL.
 - Replaced Rigidbody diving with native `m_swimDepth` control, persistent dive state, native timer maintenance, and a post-camera water-clamp override.
 
-- Replaced the running-equipment workaround with the same `Player.CheckRun` transpiler used by EquipGearWhileRunning, which removes the actual hotbar equip gate while preserving sprint movement.
-- Replaced the inverted swim-timer workaround with a call-site `IsSwimming` override for equipment updates, matching Use Equipment in Water and avoiding movement-state changes.
-- Kept Valheim's native dive target active through `UpdateMotion`/`CustomFixedUpdate` and removed GameCamera's minimum-water-distance clamp while the local player is below the surface, preventing camera snapping and buoyancy bounce-back.
+- Uses the reference `Player.CheckRun` queue-clear removal plus a `Humanoid.ClearActionQueue` fallback for the running hotbar equip gate, preserving sprint movement.
+- Replaces the native swimming check only inside the equipment transaction, leaving the real swimming state, stamina, and movement code untouched.
+- Keeps Valheim's native dive target and swim timers active through `UpdateMotion`/`CustomFixedUpdate`, and removes the camera water clamp while the local player is below the surface.
 - Fixed one-time CurrencyPocket migration so an old standalone plugin cannot re-add the same balance and duplicate coins; cleaned orphan button clones before rebuilding the pocket row.
 - Applied swim-speed scaling at `Character.UpdateSwimming`, where vanilla consumes the speed value, instead of only updating it from the render-frame player update.
 - Post-release hardening: rebuilt the running-equipment bypass around Valheim's running query and all equip call paths without changing the package version.
