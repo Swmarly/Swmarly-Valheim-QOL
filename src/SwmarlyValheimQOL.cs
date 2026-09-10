@@ -1019,7 +1019,8 @@ internal static class SwimImprovementsPatch
 [HarmonyPatch(typeof(Player), "FixedUpdate")]
 internal static class SitRegenerationFixedPatch
 {
-    private static readonly Dictionary<int, float> Accumulator = new();
+    private static readonly Dictionary<int, float> NextHealAt = new();
+    private const float HealIntervalSeconds = 1f;
 
     private static void Postfix(Player __instance)
     {
@@ -1027,19 +1028,28 @@ internal static class SitRegenerationFixedPatch
         if (!Plugin.IsLocalPlayer(__instance) || !Plugin.IsFeatureEnabled(Plugin.SitRegeneration) ||
             !__instance.IsSitting() || __instance.GetHealth() >= __instance.GetMaxHealth())
         {
-            Accumulator[id] = 0f;
+            NextHealAt.Remove(id);
             return;
         }
 
-        float accumulator = Accumulator.TryGetValue(id, out float previous) ? previous : 0f;
-        accumulator += Mathf.Max(0f, Time.fixedDeltaTime);
-        if (accumulator >= 1f && Plugin.SitHealPerSecond.Value > 0f)
+        // Use an absolute realtime deadline instead of accumulating
+        // fixedDeltaTime. In multiplayer, duplicate/replayed FixedUpdate
+        // callbacks and simulation catch-up can otherwise add the same time
+        // more than once and make sitting regeneration much faster near other
+        // networked players. Never catch up multiple ticks: one Heal call is
+        // allowed per real-time second for this player.
+        float now = Time.realtimeSinceStartup;
+        if (!NextHealAt.TryGetValue(id, out float nextHealAt))
         {
-            float ticks = Mathf.Floor(accumulator);
-            accumulator -= ticks;
-            __instance.Heal(Plugin.SitHealPerSecond.Value * ticks);
+            NextHealAt[id] = now + HealIntervalSeconds;
+            return;
         }
-        Accumulator[id] = accumulator;
+
+        if (now < nextHealAt || Plugin.SitHealPerSecond.Value <= 0f) return;
+
+        float amount = Mathf.Min(Plugin.SitHealPerSecond.Value, __instance.GetMaxHealth() - __instance.GetHealth());
+        if (amount > 0f) __instance.Heal(amount);
+        NextHealAt[id] = now + HealIntervalSeconds;
     }
 }
 
