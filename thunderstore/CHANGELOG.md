@@ -2,6 +2,11 @@
 
 ## 1.0.3
 
+- Replaced the running-equipment workaround with the same `Player.CheckRun` transpiler used by EquipGearWhileRunning, which removes the actual hotbar equip gate while preserving sprint movement.
+- Replaced the inverted swim-timer workaround with a call-site `IsSwimming` override for equipment updates, matching Use Equipment in Water and avoiding movement-state changes.
+- Kept Valheim's native dive target active through `UpdateMotion`/`CustomFixedUpdate` and removed GameCamera's minimum-water-distance clamp while the local player is below the surface, preventing camera snapping and buoyancy bounce-back.
+- Fixed one-time CurrencyPocket migration so an old standalone plugin cannot re-add the same balance and duplicate coins; cleaned orphan button clones before rebuilding the pocket row.
+- Applied swim-speed scaling at `Character.UpdateSwimming`, where vanilla consumes the speed value, instead of only updating it from the render-frame player update.
 - Post-release hardening: rebuilt the running-equipment bypass around Valheim's running query and all equip call paths without changing the package version.
 - Reworked diving to drive Valheim's native swim-depth target during fixed updates, so dive/surface input is not overwritten by vanilla buoyancy.
 - Deduplicated the currency panel, migrated the standalone CurrencyPocket balance key, and put both coin buttons in a fixed non-overlapping row.
