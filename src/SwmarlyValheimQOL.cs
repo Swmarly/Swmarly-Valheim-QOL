@@ -320,10 +320,18 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static void CreatePocketUi(InventoryGui gui)
     {
-        if (!IsFeatureEnabled(CurrencyPocket) || gui == null || gui.m_player == null) return;
-        Transform inventoryRoot = gui.m_player.transform;
-        Transform armor = inventoryRoot.Find("Armor");
-        Transform weight = inventoryRoot.Find("Weight");
+        if (!IsFeatureEnabled(CurrencyPocket) || gui == null) return;
+        Transform inventoryRoot = gui.m_player != null
+            ? gui.m_player.transform
+            : gui.m_playerGrid != null && gui.m_playerGrid.transform.parent != null
+                ? gui.m_playerGrid.transform.parent
+                : null;
+        if (inventoryRoot == null) return;
+        // Expanded-inventory and UI-layout mods reparent these controls. The
+        // old direct Find("Armor") lookup therefore made the pocket silently
+        // disappear after another mod rebuilt the inventory hierarchy.
+        Transform armor = FindDescendant(inventoryRoot, "Armor");
+        Transform weight = FindDescendant(inventoryRoot, "Weight");
         if (armor == null) return;
 
         // A GUI can survive a world/player transition and old versions of the
@@ -375,6 +383,14 @@ public sealed class Plugin : BaseUnityPlugin
         CanvasGroup pocketCanvas = PocketUi.GetComponent<CanvasGroup>();
         if (pocketCanvas != null) pocketCanvas.blocksRaycasts = true;
         SetPocketIcon();
+    }
+
+    private static Transform FindDescendant(Transform root, string name)
+    {
+        if (root == null) return null;
+        foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
+            if (child != root && child.name == name) return child;
+        return null;
     }
 
     private static void EnsurePocketButtons(InventoryGui gui)
@@ -494,13 +510,18 @@ public sealed class Plugin : BaseUnityPlugin
         {
             yield return null;
             yield return new WaitForEndOfFrame();
-            if (gui == null || gui.m_player == null) continue;
-
-            Transform armor = gui.m_player.transform.Find("Armor");
-            Transform weight = gui.m_player.transform.Find("Weight");
+            if (gui == null) continue;
+            Transform root = gui.m_player != null
+                ? gui.m_player.transform
+                : gui.m_playerGrid != null && gui.m_playerGrid.transform.parent != null
+                    ? gui.m_playerGrid.transform.parent
+                    : null;
+            if (root == null) continue;
+            Transform armor = FindDescendant(root, "Armor");
+            Transform weight = FindDescendant(root, "Weight");
             if (armor != null)
             {
-                RepositionPocketUi(gui.m_player.transform, armor, weight);
+                RepositionPocketUi(root, armor, weight);
                 SetPocketIcon();
                 UpdatePocketUi();
             }
@@ -681,7 +702,7 @@ internal static class AutoReplantState
     internal static void OnStumpDestroyed(Destructible destructible)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.AutoReplantTrees) || destructible == null ||
-            ZNet.instance == null || !ZNet.instance.IsServer() || ZNetScene.instance == null)
+            ZNet.instance == null || ZNetScene.instance == null)
             return;
 
         if (!TryGetSaplingPrefab(destructible.name, out string saplingName)) return;
@@ -734,14 +755,15 @@ internal static class AutoReplantState
         yield return new WaitForSeconds(Mathf.Max(0f, Plugin.TreeReplantDelaySeconds.Value));
         PendingInstances.Remove(instanceId);
 
-        if (ZNet.instance == null || !ZNet.instance.IsServer() || ZNetScene.instance == null) yield break;
+        if (ZNet.instance == null || ZNetScene.instance == null) yield break;
         GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
         if (prefab == null) yield break;
 
-        // ZNetScene.SpawnObject is Valheim's server-authoritative spawn path.
-        // Object.Instantiate would create a local-only sapling on a dedicated
-        // server and is the reason many client-only tree replant patches fail
-        // to replicate in multiplayer.
+        // SpawnObject is Valheim's routed spawn path. It is valid to invoke it
+        // from a client: the request is handled by the server and the sapling
+        // is then replicated to every peer. Restricting this callback to
+        // IsServer() made the feature fail whenever only the client observed
+        // the stump's Destructible.Destroy callback.
         ZNetScene.instance.SpawnObject(position, rotation, prefab);
     }
 
@@ -821,6 +843,56 @@ internal static class EquipWhileRunningPatch
         if (removedQueueClears == 0)
             Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected ClearActionQueue call.");
         return code;
+    }
+}
+
+// CheckRun's queue clear is only one cancellation path. Player.UseItem and
+// Humanoid.EquipItem also reject an action while the run state is set. The
+// reference mod's transpiler predates the Valheim 1.0 action gate, so keep the
+// real run flag false only for the native equip/use call and restore it
+// immediately afterwards. This preserves sprinting and network movement while
+// allowing the hotbar action to complete.
+[HarmonyPatch(typeof(Player), "UseItem")]
+internal static class EquipWhileRunningUseItemPatch
+{
+    private static readonly FieldInfo RunField = AccessTools.Field(typeof(Character), "m_run") ??
+                                                  AccessTools.Field(typeof(Player), "m_run");
+
+    private static void Prefix(Player __instance, ref bool __state)
+    {
+        __state = false;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !Plugin.IsLocalPlayer(__instance) || RunField == null) return;
+        __state = (bool)RunField.GetValue(__instance);
+        RunField.SetValue(__instance, false);
+    }
+
+    private static void Postfix(Player __instance, bool __state)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance) && RunField != null)
+            RunField.SetValue(__instance, __state);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "EquipItem")]
+internal static class EquipWhileRunningEquipItemPatch
+{
+    private static readonly FieldInfo RunField = AccessTools.Field(typeof(Character), "m_run") ??
+                                                  AccessTools.Field(typeof(Player), "m_run");
+
+    private static void Prefix(Humanoid __instance, ref bool __state)
+    {
+        __state = false;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player ||
+            !Plugin.IsLocalPlayer(player) || RunField == null) return;
+        __state = (bool)RunField.GetValue(player);
+        RunField.SetValue(player, false);
+    }
+
+    private static void Postfix(Humanoid __instance, bool __state)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && __instance is Player player &&
+            Plugin.IsLocalPlayer(player) && RunField != null)
+            RunField.SetValue(player, __state);
     }
 }
 
@@ -1724,6 +1796,21 @@ internal static class CurrencyUiAwakePatch
     }
 }
 
+// Show/Awake can run before another UI mod finishes rebuilding the inventory.
+// Retry only while the pocket is missing; this is cheap and makes the UI
+// recover after inventory-layout changes and world/player transitions.
+[HarmonyPatch(typeof(InventoryGui), "Update")]
+internal static class CurrencyUiRecoveryPatch
+{
+    private static void Postfix(InventoryGui __instance)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) &&
+            (Plugin.PocketUi == null || !Plugin.PocketUi ||
+             (__instance.m_player != null && !Plugin.PocketUi.transform.IsChildOf(__instance.m_player.transform))))
+            Plugin.CreatePocketUi(__instance);
+    }
+}
+
 [HarmonyPatch(typeof(Game), "Start")]
 internal static class SleepRpcRegistrationPatch
 {
@@ -1928,3 +2015,4 @@ internal static class SleepSkipPatch
         return false;
     }
 }
+
