@@ -2,7 +2,7 @@
   "name": "SwmarlyValheimQOL",
   "version_number": "1.0.3",
   "website_url": "https://github.com/Swmarly/Swmarly-Valheim-QOL",
-  "description": "One configurable Valheim 1.0 quality-of-life mod combining floating items, water equipment, running hotbar equipment, sleep voting, currency pocket, diving, SpeedyPaths, shared chests, NoAFKRaids, sneak scaling, sitting regeneration, fleeing trash mobs, no rain wear, no-stamina building tools, eternal fires, correct tree replanting, and automatic workbench repair.",
+  "description": "Configurable Valheim 1.0 QOL mod: floating items, water equipment, sleep voting, coin pocket, diving, running hotbar equipment, sitting regen, tree replanting, auto-repair, eternal fires, no-rain wear, and no-stamina building.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2350"
   ],
