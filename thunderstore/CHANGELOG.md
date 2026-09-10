@@ -2,6 +2,10 @@
 
 ## 1.0.3
 
+- Post-release hardening: rebuilt the running-equipment bypass around Valheim's running query and all equip call paths without changing the package version.
+- Reworked diving to drive Valheim's native swim-depth target during fixed updates, so dive/surface input is not overwritten by vanilla buoyancy.
+- Deduplicated the currency panel, migrated the standalone CurrencyPocket balance key, and put both coin buttons in a fixed non-overlapping row.
+- Added a direct click-to-deposit action and changed sitting regeneration to an exact one-health-per-second accumulator by default.
 - Fixed hotbar equipment while running by handling both Valheim movement flags and the central `UseItem`/`EquipItem` paths.
 - Fixed swimming equipment by bypassing the native swim gate only for the equip transaction, then restoring the real swim state.
 - Fixed diving by using held keys and applying vertical velocity after native swimming physics.
