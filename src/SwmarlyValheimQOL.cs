@@ -984,6 +984,27 @@ internal static class EquipWhileRunningPatch
     }
 }
 
+// Character.UpdateWalking checks InMinorActionSlowdown before it checks the
+// running flag. The equip animation is tagged "minoraction", so removing the
+// CheckRun queue clear makes the item switch happen but still forces the
+// player's speed down to walk speed for the duration of that animation. Keep
+// the native animation and sprint calculation, but do not let that tag cancel
+// sprinting while the local player is actively holding Run.
+[HarmonyPatch(typeof(Player), nameof(Player.InMinorActionSlowdown))]
+internal static class EquipWhileRunningSlowdownPatch
+{
+    private static bool Prefix(Player __instance, ref bool __result)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) ||
+            !Plugin.IsLocalPlayer(__instance) ||
+            (!ZInput.GetButton("Run") && !ZInput.GetButton("JoyRun")))
+            return true;
+
+        __result = false;
+        return false;
+    }
+}
+
 // The reference UseEquipmentInWater implementation does not rewrite the
 // equipment methods. Valheim's equipment code reaches IsSwimming through
 // several internal paths, and a call-site transpiler misses those paths on
@@ -1501,6 +1522,11 @@ internal static class SitRegenerationFixedPatch
 internal static class DivingPatch
 {
     internal static bool DiveToggle;
+    // Native IsSwimming can become false for a frame while the player is
+    // already below the surface. Keep this state independently so that
+    // UpdateMotion/UpdateSwimming cannot interpret that transition as a
+    // request to surface and apply the upward launch impulse.
+    internal static bool IsUnderwater;
     private static float LastRequestedDepth = 1.6f;
 
     private static bool IsDiveHeld()
@@ -1522,7 +1548,7 @@ internal static class DivingPatch
     {
         return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
                Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
-               (IsInLiquid(player) || DiveToggle || HasDiveTarget(player));
+               (IsInLiquid(player) || DiveToggle || IsUnderwater || HasDiveTarget(player));
     }
 
     internal static bool IsInLiquid(Player player)
@@ -1531,8 +1557,13 @@ internal static class DivingPatch
         // IsSwimming remains true during the native transition into a dive;
         // relying only on InWater() makes the input/camera patches drop out
         // for a frame and restores the vanilla surface target.
-        if (player.InWater() || player.IsSwimming()) return true;
-        return Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.15f;
+        return HasPhysicalLiquid(player) || player.IsSwimming();
+    }
+
+    internal static bool HasPhysicalLiquid(Player player)
+    {
+        return player != null &&
+               Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.15f;
     }
 
     internal static bool HasDiveTarget(Player player)
@@ -1550,7 +1581,7 @@ internal static class DivingPatch
     internal static bool ShouldKeepNativeSwimming(Player player)
     {
         return player != null && Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
-               (IsActuallyUnderwater(player) || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
+               (IsActuallyUnderwater(player) || IsUnderwater || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
     }
 
     private static void Prefix(Character __instance, float dt, ref Vector3 ___m_moveDir, ref Vector3 ___m_lookDir,
@@ -1565,6 +1596,7 @@ internal static class DivingPatch
         if (player.IsOnGround() || player.IsDead())
         {
             DiveToggle = false;
+            IsUnderwater = false;
             player.m_swimDepth = 1.6f;
             return;
         }
@@ -1609,8 +1641,13 @@ internal static class DivingPatch
 
         player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
         LastRequestedDepth = player.m_swimDepth;
+        if (player.m_swimDepth > 2.5f)
+            IsUnderwater = true;
         if (surface && !directDive && player.m_swimDepth <= 1.65f)
+        {
             DiveToggle = false;
+            IsUnderwater = false;
+        }
         if (player.m_swimDepth > 2.5f && DiveToggle && IsForwardHeld()) player.SetMoveDir(___m_lookDir);
 
         // BetterDiving keeps both native timers alive while the target is
@@ -1629,7 +1666,7 @@ internal static class DivingPatch
     private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player) ||
-            player.IsOnGround() || player.IsDead() || (!IsInLiquid(player) && !player.IsSwimming() && !HasDiveTarget(player))) return;
+            player.IsOnGround() || player.IsDead() || (!IsInLiquid(player) && !player.IsSwimming() && !HasDiveTarget(player) && !IsUnderwater)) return;
 
         bool controllingDepth = DiveToggle || IsDiveHeld() || IsSurfaceHeld();
         if (!controllingDepth) return;
@@ -1647,6 +1684,34 @@ internal static class DivingPatch
     }
 }
 
+// Character.UpdateMotion chooses UpdateWalking whenever the native swim timer
+// briefly expires. That is the exact frame in which Valheim applies the
+// surface correction and the player gets launched upward. A controlled local
+// dive is still a swim state even during that transient timer gap; return true
+// for the native state query until the player intentionally surfaces or leaves
+// the water volume.
+[HarmonyPatch(typeof(Character), nameof(Character.IsSwimming))]
+internal static class DivingNativeSwimmingStatePatch
+{
+    private static bool Prefix(Character __instance, ref bool __result)
+    {
+        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) ||
+            !Plugin.IsLocalPlayer(player) || player.IsOnGround() || player.IsDead())
+            return true;
+
+        if (!DivingPatch.IsUnderwater && !DivingPatch.DiveToggle && !DivingPatch.HasDiveTarget(player))
+            return true;
+
+        // Do not pin the state after the player has actually left the liquid;
+        // CustomFixedUpdate will clear the persistent flags on its next pass.
+        if (!DivingPatch.HasPhysicalLiquid(player) && !player.InWater())
+            return true;
+
+        __result = true;
+        return false;
+    }
+}
+
 // Input edge detection belongs in Player.Update. Reading GetButtonDown from a
 // fixed-update patch can miss the one rendered frame in which the button was
 // pressed, especially when the server/client frame and physics rates differ.
@@ -1656,7 +1721,7 @@ internal static class DivingInputPatch
     private static void Prefix(Player __instance)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
-            (!DivingPatch.IsInLiquid(__instance) && !__instance.IsSwimming()) || __instance.IsOnGround() || __instance.IsDead()) return;
+            (!DivingPatch.IsInLiquid(__instance) && !__instance.IsSwimming() && !DivingPatch.IsUnderwater && !DivingPatch.DiveToggle) || __instance.IsOnGround() || __instance.IsDead()) return;
 
         if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
         {
@@ -1683,6 +1748,7 @@ internal static class DivingMotionPatch
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
         if (player.IsOnGround() || player.IsDead())
         {
+            DivingPatch.IsUnderwater = false;
             player.m_swimDepth = 1.6f;
             return;
         }
@@ -1700,7 +1766,7 @@ internal static class DivingMotionPatch
         // seconds, which is the recurring bounce reported on dedicated
         // servers.
         bool controlledDive = player.m_swimDepth > 2.5f &&
-                              (DivingPatch.IsInLiquid(player) || player.IsSwimming());
+                              (DivingPatch.HasPhysicalLiquid(player) || player.IsSwimming() || DivingPatch.DiveToggle || DivingPatch.IsUnderwater);
         if (DivingPatch.IsActuallyUnderwater(player) || controlledDive)
         {
             ___m_lastGroundTouch = 0.3f;
@@ -1720,8 +1786,7 @@ internal static class DivingSwimmingTimerPatch
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) ||
             !Plugin.IsLocalPlayer(player) || player.IsOnGround() || player.IsDead()) return;
-        if (!DivingPatch.HasDiveTarget(player) ||
-            (!DivingPatch.IsInLiquid(player) && !player.IsSwimming())) return;
+        if (!DivingPatch.HasDiveTarget(player) && !DivingPatch.IsUnderwater) return;
 
         ___m_lastGroundTouch = 0.3f;
         ___m_swimTimer = 0f;
