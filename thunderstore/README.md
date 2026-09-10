@@ -35,7 +35,7 @@ Do not install duplicate copies of the individual mods at the same time. Their o
 
 ## Compatibility
 
-Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, chest open/stack access, NoAFKRaids, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
+Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, chest open/stack and item transactions, NoAFKRaids, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
 
 ## Credits
 
