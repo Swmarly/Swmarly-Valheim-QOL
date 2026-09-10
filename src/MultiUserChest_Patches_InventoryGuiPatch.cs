@@ -147,7 +147,7 @@ namespace SwmarlyValheimQOL {
             }
         }
 
-        private static void ShowItem(InventoryGrid inventoryGrid, InventoryGrid.Element element, ItemDrop.ItemData item) {
+        private static void ShowItem(InventoryGrid inventoryGrid, InventoryElement element, ItemDrop.ItemData item) {
             if (item?.m_shared == null) {
                 return;
             }
@@ -200,7 +200,7 @@ namespace SwmarlyValheimQOL {
             }
         }
 
-        private static void ShowNoItem(InventoryGrid.Element element) {
+        private static void ShowNoItem(InventoryElement element) {
             element.m_durability.gameObject.SetActive(false);
             element.m_icon.enabled = false;
             element.m_amount.enabled = false;
