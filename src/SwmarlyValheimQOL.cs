@@ -20,7 +20,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.4";
+    public const string PluginVersion = "1.0.3";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
