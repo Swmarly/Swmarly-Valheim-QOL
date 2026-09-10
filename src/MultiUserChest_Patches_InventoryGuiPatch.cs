@@ -9,6 +9,7 @@ namespace SwmarlyValheimQOL {
     public static class InventoryGuiPatch {
         [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.Update)), HarmonyPostfix]
         public static void InventoryGuiUpdatePatch(InventoryGui __instance) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (__instance.m_currentContainer && __instance.m_currentContainer.m_nview && __instance.m_currentContainer.m_nview.IsValid()) {
                 __instance.m_currentContainer.CheckForChanges();
             }
@@ -16,6 +17,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnRightClickItem)), HarmonyPrefix]
         public static bool InventoryGuiOnRightClickItemPatch(InventoryGui __instance, InventoryGrid grid, ItemDrop.ItemData item) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
             Player player = Player.m_localPlayer;
 
             if (item == null || !player) {
@@ -45,6 +47,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateContainer)), HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> ChangeOwnerCheck(IEnumerable<CodeInstruction> instructions) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return instructions;
             // any player can potentially open a container, thus the IsOwner() statement need to be changed
             return new CodeMatcher(instructions)
                    .MatchForward(true,
@@ -57,6 +60,7 @@ namespace SwmarlyValheimQOL {
         }
 
         public static bool CanOpenContainer(Container container) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return container.IsOwner();
             if (container.IgnoreInventory()) {
                 // do not change behavior for ignored containers
                 return container.IsOwner();
@@ -67,6 +71,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnDropOutside)), HarmonyPrefix]
         public static void InventoryGuiOnDropOutsidePatch(InventoryGui __instance, ref bool __runOriginal) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!__runOriginal) {
                 return;
             }
@@ -96,6 +101,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.Load)), HarmonyPostfix]
         public static void InventorySelectSameItemAfterLoad(Inventory __instance) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!InventoryGui.instance || InventoryGui.instance.m_dragItem == null) {
                 return;
             }
@@ -123,6 +129,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(InventoryGrid), nameof(InventoryGrid.UpdateInventory)), HarmonyPostfix]
         public static void InventoryGridUpdateInventoryPatch(InventoryGrid __instance) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!InventoryPreview.GetChanges(__instance.m_inventory, out SlotPreview preview)) {
                 return;
             }
@@ -207,4 +214,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
