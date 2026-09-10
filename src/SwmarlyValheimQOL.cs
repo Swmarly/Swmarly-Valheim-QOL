@@ -20,7 +20,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.3";
+    public const string PluginVersion = "1.0.4";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -80,6 +80,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static int SleepTotal;
     internal static bool SleepVoteActive;
     internal static bool SleepPopupOpen;
+    internal static string LastSleepDisplay;
     internal static DateTime SleepWarningStarted = DateTime.MinValue;
     internal static int SleepLastWarning = -1;
 
@@ -739,9 +740,13 @@ internal static class CurrencyUiAwakePatch
 [HarmonyPatch(typeof(Game), "Start")]
 internal static class SleepRpcRegistrationPatch
 {
+    private static ZRoutedRpc RegisteredRpc;
+
     private static void Postfix()
     {
         if (!Plugin.IsFeatureEnabled(Plugin.SleepSkip) || ZRoutedRpc.instance == null) return;
+        if (RegisteredRpc == ZRoutedRpc.instance) return;
+        RegisteredRpc = ZRoutedRpc.instance;
         ZRoutedRpc.instance.Register(nameof(SleepRpc.OpenPopup), new Action<long>(SleepRpc.OpenPopup));
         ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteYes), new Action<long, long>(SleepRpc.VoteYes));
         ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteNo), new Action<long, long>(SleepRpc.VoteNo));
@@ -759,6 +764,7 @@ internal static class SleepRpc
         if (Plugin.SleepPopupOpen) return;
         if (Plugin.SleepAutoAccept.Value)
         {
+            Plugin.SleepPopupOpen = true;
             Vote(true);
             return;
         }
@@ -797,6 +803,8 @@ internal static class SleepRpc
         int.TryParse(parts[2], out Plugin.SleepNoCount);
         int.TryParse(parts[3], out Plugin.SleepWaiting);
         int.TryParse(parts[4], out Plugin.SleepTotal);
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null && UnifiedPopup.instance.bodyText != null)
+            UnifiedPopup.instance.bodyText.text = Plugin.SleepVoteBody();
     }
 
     internal static void Reset(long sender)
@@ -809,6 +817,7 @@ internal static class SleepRpc
         Plugin.SleepVoteActive = false;
         Plugin.SleepVoteStarted = DateTime.MinValue;
         Plugin.SleepWarningStarted = DateTime.MinValue;
+        Plugin.LastSleepDisplay = null;
         Plugin.SleepInBed = Plugin.SleepYesCount = Plugin.SleepNoCount = Plugin.SleepWaiting = Plugin.SleepTotal = 0;
     }
 
@@ -842,13 +851,13 @@ internal static class SleepSkipPatch
         int inBed = InBed.Count;
         if (inBed == 0 || (Plugin.SleepCooldownSeconds.Value > 0 && Plugin.LastSleepCompleted != DateTime.MinValue && DateTime.UtcNow < Plugin.LastSleepCompleted.AddSeconds(Plugin.SleepCooldownSeconds.Value)))
         {
-            if (Plugin.SleepVoteActive) SleepRpc.BroadcastReset();
+            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
             __result = false;
             return false;
         }
         if (inBed >= total || (total > 1 && inBed < Plugin.SleepPlayersNeeded.Value))
         {
-            if (Plugin.SleepVoteActive) SleepRpc.BroadcastReset();
+            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
             __result = inBed >= total;
             return false;
         }
@@ -871,6 +880,8 @@ internal static class SleepSkipPatch
         if (!ZNet.instance.IsDedicated()) CurrentPlayers.Add(ZNet.GetUID());
         Plugin.SleepYes.IntersectWith(CurrentPlayers);
         Plugin.SleepNo.IntersectWith(CurrentPlayers);
+        Plugin.SleepYes.ExceptWith(InBed);
+        Plugin.SleepNo.ExceptWith(InBed);
 
         int explicitYes = Plugin.SleepYes.Count(id => !InBed.Contains(id));
         int explicitNo = Plugin.SleepNo.Count(id => !InBed.Contains(id));
@@ -902,8 +913,12 @@ internal static class SleepSkipPatch
         }
         if (!ZNet.instance.IsDedicated() && !InBed.Contains(ZNet.GetUID())) SleepRpc.OpenPopup(0);
         string display = $"{inBed},{explicitYes},{explicitNo},{waiting},{total}";
-        foreach (ZNetPeer peer in ZNet.instance.m_peers) ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_characterID.UserID, nameof(SleepRpc.UpdateDisplay), display);
-        if (!ZNet.instance.IsDedicated()) SleepRpc.UpdateDisplay(0, display);
+        if (Plugin.LastSleepDisplay != display)
+        {
+            Plugin.LastSleepDisplay = display;
+            foreach (ZNetPeer peer in ZNet.instance.m_peers) ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_characterID.UserID, nameof(SleepRpc.UpdateDisplay), display);
+            if (!ZNet.instance.IsDedicated()) SleepRpc.UpdateDisplay(0, display);
+        }
 
         float ratio = (float)yes / effectiveTotal * 100f;
         int bestCase = yes + (timedOut ? 0 : waiting);
