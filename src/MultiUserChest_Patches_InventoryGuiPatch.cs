@@ -134,7 +134,7 @@ namespace SwmarlyValheimQOL {
                 return;
             }
 
-            foreach (InventoryGrid.Element element in __instance.m_elements) {
+            foreach (InventoryElement element in __instance.m_elements) {
                 if (!preview.GetSlot(element.m_pos, out ItemDrop.ItemData item)) {
                     continue;
                 }
