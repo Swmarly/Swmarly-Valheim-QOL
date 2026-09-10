@@ -451,16 +451,22 @@ public sealed class Plugin : BaseUnityPlugin
     {
         // Inventory mods commonly move Armor/Weight from their own Show
         // postfixes. Wait until those postfixes have run before positioning our
-        // clone, then wait one frame more for layout rebuilds.
-        yield return null;
-        yield return new WaitForEndOfFrame();
-        if (gui != null && gui.m_player != null)
+        // clone, then repeat the calculation for a few frames so layout groups
+        // and expanded-inventory mods cannot move the pocket back afterwards.
+        for (int frame = 0; frame < 6; ++frame)
         {
+            yield return null;
+            yield return new WaitForEndOfFrame();
+            if (gui == null || gui.m_player == null) continue;
+
             Transform armor = gui.m_player.transform.Find("Armor");
             Transform weight = gui.m_player.transform.Find("Weight");
-            if (armor != null) RepositionPocketUi(gui.m_player.transform, armor, weight);
-            SetPocketIcon();
-            UpdatePocketUi();
+            if (armor != null)
+            {
+                RepositionPocketUi(gui.m_player.transform, armor, weight);
+                SetPocketIcon();
+                UpdatePocketUi();
+            }
         }
         PocketUiRepositionCoroutine = null;
     }
@@ -474,15 +480,36 @@ public sealed class Plugin : BaseUnityPlugin
         // CurrencyPocket places the card between Armor and Weight. Placing it
         // below Weight collides with the extra panels used by inventory/armor
         // UI mods, which is what caused the old screenshot layout.
-        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
-        RectTransform referenceRect = weightRect;
-        if (referenceRect == null || referenceRect.parent != pocketRect.parent) return;
         Canvas.ForceUpdateCanvases();
 
-        if (armorRect.parent != pocketRect.parent) return;
-        pocketRect.anchoredPosition = new Vector2(armorRect.anchoredPosition.x,
-            (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
-        pocketRect.SetSiblingIndex(Mathf.Min(armor.GetSiblingIndex() + 1, pocketRect.parent.childCount - 1));
+        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
+        if (weightRect != null)
+        {
+            // Armor, Weight, and the cloned card normally share the player's
+            // inventory transform, but expanded-inventory mods can put one of
+            // them under a layout container. Use world-space centers in that
+            // case instead of abandoning the reposition and leaving the card
+            // at the clone's old (usually below-Weight) position.
+            Vector3 armorCenter = armorRect.TransformPoint(armorRect.rect.center);
+            Vector3 weightCenter = weightRect.TransformPoint(weightRect.rect.center);
+            Vector3 midpoint = (armorCenter + weightCenter) * 0.5f;
+            if (pocketRect.parent != null)
+            {
+                Vector3 localMidpoint = pocketRect.parent.InverseTransformPoint(midpoint);
+                pocketRect.anchoredPosition = new Vector2(localMidpoint.x, localMidpoint.y);
+            }
+        }
+        else
+        {
+            Vector3 armorCenter = armorRect.TransformPoint(armorRect.rect.center);
+            Vector3 localArmor = pocketRect.parent == null ? armorCenter : pocketRect.parent.InverseTransformPoint(armorCenter);
+            pocketRect.anchoredPosition = new Vector2(localArmor.x, localArmor.y - armorRect.rect.height - 8f);
+        }
+
+        // Keep the card in the same sibling band as Armor/Weight so an
+        // inventory layout group cannot render another panel on top of it.
+        if (pocketRect.parent != null)
+            pocketRect.SetSiblingIndex(Mathf.Clamp(armor.GetSiblingIndex() + 1, 0, pocketRect.parent.childCount - 1));
     }
 
     private static void SetPocketIcon()
@@ -572,21 +599,56 @@ internal static class EquipWhileRunningPatch
 [HarmonyPatch(typeof(Player), "UseHotbarItem")]
 internal static class EquipWhileRunningHotbarPatch
 {
-    private static void Prefix(Player __instance)
+    private static void Prefix(Player __instance, ref bool ___m_running, out bool __state)
     {
+        __state = false;
         if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
         {
+            // The 1.0 equip path can reject the item from inside UseItem /
+            // EquipItem while m_running is already true. That happens after
+            // the hotbar selection flashes, which is why a CheckRun-only patch
+            // appears to work for one frame but still does not equip anything.
+            // Temporarily clear the movement flag for the synchronous hotbar
+            // transaction and restore it in the finalizer below.
+            __state = ___m_running;
+            ___m_running = false;
             EquipWhileRunningPatch.HotbarTransactionDepth++;
-            // Valheim can defer the actual EquipItem call until the next
-            // update after UseHotbarItem returns. Keep the bypass alive for
-            // that deferred transaction as well as the immediate call.
-            Plugin.HotbarEquipAllowanceUntil = Time.time + 0.35f;
+            // Keep the bypass alive for an equip call deferred by a modded
+            // inventory or hotbar implementation.
+            Plugin.HotbarEquipAllowanceUntil = Time.time + 0.5f;
         }
     }
 
-    private static void Finalizer()
+    private static void Finalizer(Player __instance, ref bool ___m_running, bool __state)
     {
-        if (EquipWhileRunningPatch.HotbarTransactionDepth > 0) EquipWhileRunningPatch.HotbarTransactionDepth--;
+        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
+        {
+            if (__state) ___m_running = true;
+            if (EquipWhileRunningPatch.HotbarTransactionDepth > 0) EquipWhileRunningPatch.HotbarTransactionDepth--;
+        }
+    }
+}
+
+// EquipItem is the final common path for hotbar selection. Keep this direct
+// guard as well as the CheckRun transpiler: Valheim 1.0 and older 0.22 builds
+// place the running restriction in different parts of the call chain.
+[HarmonyPatch(typeof(Humanoid), "EquipItem")]
+internal static class EquipWhileRunningEquipItemPatch
+{
+    private static void Prefix(Humanoid __instance, ref bool ___m_running, out bool __state)
+    {
+        __state = false;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player ||
+            !Plugin.IsLocalPlayer(player) ||
+            (EquipWhileRunningPatch.HotbarTransactionDepth <= 0 && Time.time > Plugin.HotbarEquipAllowanceUntil)) return;
+
+        __state = ___m_running;
+        ___m_running = false;
+    }
+
+    private static void Finalizer(Humanoid __instance, ref bool ___m_running, bool __state)
+    {
+        if (__state && __instance is Player player && Plugin.IsLocalPlayer(player)) ___m_running = true;
     }
 }
 
@@ -1155,7 +1217,6 @@ internal static class SitRegenerationFixedPatch
 internal static class DivingPatch
 {
     internal static bool DiveToggle;
-    private static bool DiveButtonWasHeld;
 
     private static bool IsDiveHeld()
     {
@@ -1196,19 +1257,9 @@ internal static class DivingPatch
         if (!player.InWater() || player.IsOnGround() || player.IsDead())
         {
             DiveToggle = false;
-            DiveButtonWasHeld = false;
             player.m_swimDepth = 1.6f;
             return;
         }
-
-        // BetterDiving toggles a persistent dive state on the crouch edge. The
-        // configured Dive key remains a hold-to-dive shortcut for players who
-        // do not want a toggle. Do not use Rigidbody velocity: native Valheim
-        // swimming consumes m_swimDepth and overwrites velocity every tick.
-        bool crouchHeld = ZInput.GetButton("Crouch") || ZInput.GetButton("JoyCrouch");
-        bool crouchPressed = (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch")) && !DiveButtonWasHeld;
-        DiveButtonWasHeld = crouchHeld;
-        if (crouchPressed) DiveToggle = !DiveToggle;
 
         float fixedDelta = Mathf.Max(dt, Time.fixedDeltaTime);
         float depth = player.m_swimDepth;
@@ -1224,12 +1275,16 @@ internal static class DivingPatch
         {
             depth -= speed * fixedDelta;
         }
-        else if (DiveToggle && IsForwardHeld())
+        else if (DiveToggle)
         {
-            // This is the reference mod's look-direction behaviour, with a
-            // configured rate so it remains usable with mouse and controller.
-            if (___m_lookDir.y < -0.15f) depth += speed * fixedDelta;
-            else if (___m_lookDir.y > 0.15f) depth -= speed * fixedDelta;
+            // BetterDiving uses the look direction to control its target depth.
+            // Keep that behavior when the player looks up/down, but make the
+            // toggle itself descend instead of requiring a short input event to
+            // be observed by FixedUpdate. This is reliable with both keyboard
+            // and controller input and keeps the player underwater until the
+            // surface key/jump or an upward look is used.
+            if (___m_lookDir.y > 0.15f) depth -= speed * fixedDelta;
+            else depth += speed * fixedDelta;
         }
 
         player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
@@ -1246,6 +1301,22 @@ internal static class DivingPatch
 
         if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || (DiveToggle && IsForwardHeld())))
             player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
+    }
+}
+
+// Input edge detection belongs in Player.Update. Reading GetButtonDown from a
+// fixed-update patch can miss the one rendered frame in which the button was
+// pressed, especially when the server/client frame and physics rates differ.
+[HarmonyPatch(typeof(Player), "Update")]
+internal static class DivingInputPatch
+{
+    private static void Prefix(Player __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
+            !__instance.InWater() || __instance.IsOnGround() || __instance.IsDead()) return;
+
+        if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
+            DivingPatch.DiveToggle = !DivingPatch.DiveToggle;
     }
 }
 
@@ -1309,10 +1380,12 @@ internal static class DivingCameraPatch
         // on Valheim 1.0 because UpdateCamera can clamp the camera back above
         // the player during the same frame; the postfix protects against
         // camera mods that run later in the chain.
-        if (targetUnderwater || cameraUnderwater)
+        if (localWaterPlayer)
         {
             __instance.m_minWaterDistance = -5000f;
-            __instance.m_maxDistance = Mathf.Min(3f, OriginalMaxDistance[id]);
+            __instance.m_maxDistance = targetUnderwater || cameraUnderwater
+                ? Mathf.Min(3f, OriginalMaxDistance[id])
+                : OriginalMaxDistance[id];
         }
         else
         {
