@@ -40,7 +40,12 @@ namespace SwmarlyValheimQOL {
             // invoke vanilla method to add a new item into the inventory system
             // while not as performant as adding creating a ItemDrop manually, this improves compatibility with other mods
             Inventory tempInventory = new Inventory("tmp", null, pos.x + 1, pos.y + 1);
-            tempInventory.AddItem(name, stack, durability, pos, false, quality, variant, crafterID, crafterName, customData, worldLevel, pickedUp);
+            ItemDrop.ItemData created = tempInventory.AddItem(name, stack, quality, variant, crafterID, crafterName, pos, pickedUp);
+            if (created != null) {
+                created.m_durability = durability;
+                created.m_worldLevel = worldLevel;
+                created.m_customData = customData;
+            }
 
             ItemDrop.ItemData itemData = tempInventory.GetItemAt(pos.x, pos.y);
             tempInventory.RemoveItem(itemData);
@@ -235,4 +240,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
