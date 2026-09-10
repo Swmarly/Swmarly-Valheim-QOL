@@ -91,7 +91,6 @@ public sealed class Plugin : BaseUnityPlugin
     internal static Button PocketDepositButton;
     internal static TextMeshProUGUI PocketText;
     internal static Coroutine PocketUiRepositionCoroutine;
-    internal static float HotbarEquipAllowanceUntil;
 
     internal static readonly HashSet<long> SleepYes = new();
     internal static readonly HashSet<long> SleepNo = new();
@@ -477,37 +476,35 @@ public sealed class Plugin : BaseUnityPlugin
         RectTransform armorRect = armor == null ? null : armor.GetComponent<RectTransform>();
         if (pocketRect == null || armorRect == null) return;
 
-        // CurrencyPocket places the card between Armor and Weight. Placing it
-        // below Weight collides with the extra panels used by inventory/armor
-        // UI mods, which is what caused the old screenshot layout.
-        Canvas.ForceUpdateCanvases();
-
         RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
-        if (weightRect != null)
+
+        // Armor and Weight are siblings in Valheim's inventory canvas. Use
+        // their anchored coordinates directly, matching CurrencyPocket. The
+        // previous world-space conversion applied the parent's anchor offset
+        // a second time and moved the pocket into the middle of the screen.
+        if (pocketRect.parent != armorRect.parent)
+            pocketRect.SetParent(armorRect.parent, false);
+
+        pocketRect.anchorMin = armorRect.anchorMin;
+        pocketRect.anchorMax = armorRect.anchorMax;
+        pocketRect.pivot = armorRect.pivot;
+
+        if (weightRect != null && weightRect.parent == armorRect.parent)
         {
-            // Armor, Weight, and the cloned card normally share the player's
-            // inventory transform, but expanded-inventory mods can put one of
-            // them under a layout container. Use world-space centers in that
-            // case instead of abandoning the reposition and leaving the card
-            // at the clone's old (usually below-Weight) position.
-            Vector3 armorCenter = armorRect.TransformPoint(armorRect.rect.center);
-            Vector3 weightCenter = weightRect.TransformPoint(weightRect.rect.center);
-            Vector3 midpoint = (armorCenter + weightCenter) * 0.5f;
-            if (pocketRect.parent != null)
-            {
-                Vector3 localMidpoint = pocketRect.parent.InverseTransformPoint(midpoint);
-                pocketRect.anchoredPosition = new Vector2(localMidpoint.x, localMidpoint.y);
-            }
+            pocketRect.anchoredPosition = new Vector2(
+                armorRect.anchoredPosition.x,
+                (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
         }
         else
         {
-            Vector3 armorCenter = armorRect.TransformPoint(armorRect.rect.center);
-            Vector3 localArmor = pocketRect.parent == null ? armorCenter : pocketRect.parent.InverseTransformPoint(armorCenter);
-            pocketRect.anchoredPosition = new Vector2(localArmor.x, localArmor.y - armorRect.rect.height - 8f);
+            // Fallback for inventory-layout mods that reparent Weight. Keep
+            // the pocket beside Armor without another world/anchored conversion.
+            pocketRect.anchoredPosition = new Vector2(
+                armorRect.anchoredPosition.x,
+                armorRect.anchoredPosition.y - armorRect.rect.height - 8f);
         }
 
-        // Keep the card in the same sibling band as Armor/Weight so an
-        // inventory layout group cannot render another panel on top of it.
+        // Keep the card directly after Armor, before Weight and extension UI.
         if (pocketRect.parent != null)
             pocketRect.SetSiblingIndex(Mathf.Clamp(armor.GetSiblingIndex() + 1, 0, pocketRect.parent.childCount - 1));
     }
@@ -557,13 +554,12 @@ internal static class FloatingItemsStartPatch
 [HarmonyPatch(typeof(Player), "CheckRun")]
 internal static class EquipWhileRunningPatch
 {
-    [ThreadStatic]
-    internal static int HotbarTransactionDepth;
-
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning)) return instructions;
+
         List<CodeInstruction> code = instructions.ToList();
-        int removedChecks = 0;
+        int removedQueueClears = 0;
 
         for (int i = 1; i < code.Count; ++i)
         {
@@ -571,102 +567,21 @@ internal static class EquipWhileRunningPatch
                 continue;
 
             MethodInfo called = code[i].operand as MethodInfo;
-            string operandText = code[i].operand?.ToString() ?? string.Empty;
-            bool isRunningQuery = called != null && called.Name == nameof(Character.IsRunning) &&
-                                  called.ReturnType == typeof(bool) &&
-                                  (called.DeclaringType == typeof(Character) ||
-                                   operandText.IndexOf("Character.IsRunning", StringComparison.Ordinal) >= 0 ||
-                                   operandText.IndexOf("Character::IsRunning", StringComparison.Ordinal) >= 0);
-            if (!isRunningQuery) continue;
+            if (called == null || called.Name != "ClearActionQueue" || called.ReturnType != typeof(void)) continue;
 
-            // EquipGearWhileRunning uses this same call-site patch. The run
-            // check in CheckRun is the gate that makes Player.UseHotbarItem
-            // flash/select and then immediately refuse the equip transaction.
-            // Current Valheim builds can emit either call or callvirt here.
-            // Removing the receiver and query leaves the rest of CheckRun's
-            // stamina/sprint calculation intact.
+            // Valheim 1.0 queues weapons/tools whose equip duration is not
+            // instant. Player.CheckRun clears that queue whenever sprinting,
+            // so the hotbar selection flashes and then disappears. Remove the
+            // receiver load and only that queue-clear call; preserve stamina
+            // and sprint calculation.
             code[i - 1].opcode = System.Reflection.Emit.OpCodes.Nop;
             code[i].opcode = System.Reflection.Emit.OpCodes.Nop;
-            removedChecks++;
+            removedQueueClears++;
         }
 
-        if (removedChecks == 0)
-            Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected Character.IsRunning call.");
+        if (removedQueueClears == 0)
+            Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected ClearActionQueue call.");
         return code;
-    }
-}
-
-[HarmonyPatch(typeof(Player), "UseHotbarItem")]
-internal static class EquipWhileRunningHotbarPatch
-{
-    private static void Prefix(Player __instance, ref bool ___m_running, out bool __state)
-    {
-        __state = false;
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
-        {
-            // The 1.0 equip path can reject the item from inside UseItem /
-            // EquipItem while m_running is already true. That happens after
-            // the hotbar selection flashes, which is why a CheckRun-only patch
-            // appears to work for one frame but still does not equip anything.
-            // Temporarily clear the movement flag for the synchronous hotbar
-            // transaction and restore it in the finalizer below.
-            __state = ___m_running;
-            ___m_running = false;
-            EquipWhileRunningPatch.HotbarTransactionDepth++;
-            // Keep the bypass alive for an equip call deferred by a modded
-            // inventory or hotbar implementation.
-            Plugin.HotbarEquipAllowanceUntil = Time.time + 0.5f;
-        }
-    }
-
-    private static void Finalizer(Player __instance, ref bool ___m_running, bool __state)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
-        {
-            if (__state) ___m_running = true;
-            if (EquipWhileRunningPatch.HotbarTransactionDepth > 0) EquipWhileRunningPatch.HotbarTransactionDepth--;
-        }
-    }
-}
-
-// EquipItem is the final common path for hotbar selection. Keep this direct
-// guard as well as the CheckRun transpiler: Valheim 1.0 and older 0.22 builds
-// place the running restriction in different parts of the call chain.
-[HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipWhileRunningEquipItemPatch
-{
-    private static void Prefix(Humanoid __instance, ref bool ___m_running, out bool __state)
-    {
-        __state = false;
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player ||
-            !Plugin.IsLocalPlayer(player) ||
-            (EquipWhileRunningPatch.HotbarTransactionDepth <= 0 && Time.time > Plugin.HotbarEquipAllowanceUntil)) return;
-
-        __state = ___m_running;
-        ___m_running = false;
-    }
-
-    private static void Finalizer(Humanoid __instance, ref bool ___m_running, bool __state)
-    {
-        if (__state && __instance is Player player && Plugin.IsLocalPlayer(player)) ___m_running = true;
-    }
-}
-
-[HarmonyPatch(typeof(Character), nameof(Character.IsRunning))]
-internal static class EquipWhileRunningQueryPatch
-{
-    private static bool Prefix(Character __instance, ref bool __result)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && __instance == Player.m_localPlayer &&
-            (EquipWhileRunningPatch.HotbarTransactionDepth > 0 || Time.time <= Plugin.HotbarEquipAllowanceUntil))
-        {
-            // UseHotbarItem is the authoritative transaction boundary. This
-            // catches the running query even if a future Valheim build moves
-            // the gate out of CheckRun or changes its IL call opcode.
-            __result = false;
-            return false;
-        }
-        return true;
     }
 }
 
@@ -1196,6 +1111,85 @@ internal static class SitRegenerationFixedPatch
         // fixedDeltaTime. In multiplayer, duplicate/replayed FixedUpdate
         // callbacks and simulation catch-up can otherwise add the same time
         // more than once and make sitting regeneration much faster near other
+         FleeOnSightPatch
+{
+    private static void Postfix(MonsterAI __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.FleeOnSight)) return;
+        string name = __instance.name.ToLowerInvariant();
+        foreach (string configured in Plugin.FleeMobNames.Value.Split(','))
+        {
+            if (!string.IsNullOrWhiteSpace(configured) && name.Contains(configured.Trim().ToLowerInvariant()))
+            {
+                __instance.m_fleeIfNotAlerted = true;
+                return;
+            }
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Player), "Update")]
+internal static class PlayerQolUpdatePatch
+{
+    private static readonly Dictionary<int, float> BaseCrouchSpeed = new();
+
+    private static void Prefix(Player __instance)
+    {
+        int id = __instance.GetInstanceID();
+        if (Plugin.IsFeatureEnabled(Plugin.SneakSpeed))
+        {
+            if (!BaseCrouchSpeed.ContainsKey(id)) BaseCrouchSpeed[id] = __instance.m_crouchSpeed;
+            float factor = __instance.m_skills == null ? 0f : __instance.m_skills.GetSkillFactor(Skills.SkillType.Sneak);
+            __instance.m_crouchSpeed = BaseCrouchSpeed[id] * Mathf.Lerp(1f, Plugin.SneakSpeedMultiplier.Value, factor);
+        }
+    }
+
+    private static void Postfix(Player __instance)
+    {
+        if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
+            __instance.UseStamina(-Plugin.SwimIdleStaminaPerSecond.Value * Time.deltaTime);
+
+    }
+}
+
+[HarmonyPatch(typeof(Character), "UpdateSwimming")]
+internal static class SwimImprovementsPatch
+{
+    private static readonly Dictionary<int, float> BaseSwimSpeed = new();
+
+    private static void Prefix(Character __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.SwimImprovements) || __instance is not Player player) return;
+
+        int id = player.GetInstanceID();
+        if (!BaseSwimSpeed.ContainsKey(id)) BaseSwimSpeed[id] = player.m_swimSpeed;
+        float factor = player.m_skills == null ? 0f : player.m_skills.GetSkillFactor(Skills.SkillType.Swim);
+        float speed = BaseSwimSpeed[id] * Mathf.Lerp(1f, Plugin.MaxSwimSpeedMultiplier.Value, factor);
+        if (Plugin.SwimSprint.Value && Plugin.IsLocalPlayer(player) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
+        player.m_swimSpeed = speed;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "FixedUpdate")]
+internal static class SitRegenerationFixedPatch
+{
+    private static readonly Dictionary<int, float> NextHealAt = new();
+    private const float HealIntervalSeconds = 1f;
+
+    private static void Postfix(Player __instance)
+    {
+        int id = __instance.GetInstanceID();
+        if (!Plugin.IsLocalPlayer(__instance) || !Plugin.IsFeatureEnabled(Plugin.SitRegeneration) ||
+            !__instance.IsSitting() || __instance.GetHealth() >= __instance.GetMaxHealth())
+        {
+            NextHealAt.Remove(id);
+            return;
+        }
+
+        // Use an absolute realtime deadline instead of accumulating
+        // fixedDeltaTime. In multiplayer, duplicate/replayed FixedUpdate
+        // callbacks and simulation catch-up can otherwise add the same time
+        // more than once and make sitting regeneration much faster near other
         // networked players. Never catch up multiple ticks: one Heal call is
         // allowed per real-time second for this player.
         float now = Time.realtimeSinceStartup;
@@ -1244,9 +1238,17 @@ internal static class DivingPatch
         return player != null && player.m_swimDepth > 2.5f;
     }
 
+    internal static bool IsActuallyUnderwater(Player player)
+    {
+        return player != null && !player.IsOnGround() && !player.IsDead() &&
+               player.m_swimDepth > 2.5f &&
+               Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 2.5f;
+    }
+
     internal static bool ShouldKeepNativeSwimming(Player player)
     {
-        return IsLocalWaterPlayer(player) && (HasDiveTarget(player) || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
+        return player != null && Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
+               (IsActuallyUnderwater(player) || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
     }
 
     private static void Prefix(Character __instance, float dt, ref Vector3 ___m_moveDir, ref Vector3 ___m_lookDir,
@@ -1254,7 +1256,12 @@ internal static class DivingPatch
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
 
-        if (!player.InWater() || player.IsOnGround() || player.IsDead())
+        // Do not use InWater() as the reset condition while a dive is active.
+        // The cached liquid-depth value can briefly report false during the
+        // transition below the surface; resetting m_swimDepth there restores
+        // the vanilla 1.6 target and launches the player back up.
+        if (player.IsOnGround() || player.IsDead() ||
+            (!player.InWater() && !DiveToggle && !IsActuallyUnderwater(player)))
         {
             DiveToggle = false;
             player.m_swimDepth = 1.6f;
@@ -1299,7 +1306,7 @@ internal static class DivingPatch
             ___m_swimTimer = 0f;
         }
 
-        if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || (DiveToggle && IsForwardHeld())))
+        if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || DiveToggle))
             player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
     }
 }
@@ -1323,21 +1330,143 @@ internal static class DivingInputPatch
 [HarmonyPatch(typeof(Character), "UpdateMotion")]
 internal static class DivingMotionPatch
 {
+    [HarmonyPriority(Priority.First)]
     private static void Prefix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player) return;
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
-        if (!player.InWater() || player.IsOnGround() || player.IsDead())
+        if (player.IsOnGround() || player.IsDead())
         {
             player.m_swimDepth = 1.6f;
             return;
         }
 
-        // UpdateMotion is where Valheim decides whether the player is still a
-        // swimmer. Repeat the native BetterDiving state correction here so the
-        // camera and movement code cannot reset the player between physics
-        // ticks while the depth target is below the surface.
-        if (DivingPatch.ShouldKeepNativeSwimming(player))
+        // This is the exact state BetterDiving maintains. Valheim's native
+        // UpdateSwimming applies an upward launch as soon as m_swimTimer is
+        // allowed to expire, even when m_swimDepth is still below the surface.
+        // Keep the native swimmer alive based on actual liquid depth, not the
+        // transient InWater() cache or the input toggle.
+        if (DivingPatch.IsActuallyUnderwater(player))
+        {
+            ___m_lastGroundTouch = 0.3f;
+            ___m_swimTimer = 0f;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
+internal static class DivingCameraPatch
+{
+    private static readonly Dictionary<int, float> OriginalWaterDistance = new();
+    private static readonly Dictionary<int, float> OriginalMaxDistance = new();
+
+    private static void Prefix(GameCamera __instance, Camera ___m_camera)
+    {
+        Apply(__instance, ___m_camera);
+    }
+
+    private static void Postfix(GameCamera __instance, Camera ___m_camera)
+    {
+        Apply(__instance, ___m_camera);
+    }
+
+    private static void Apply(GameCamera __instance, Camera ___m_camera)
+    {
+        Pf float ___m_swimTimer)
+    {
+        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
+
+        // Do not use InWater() as the reset condition while a dive is active.
+        // The cached liquid-depth value can briefly report false during the
+        // transition below the surface; resetting m_swimDepth there restores
+        // the vanilla 1.6 target and launches the player back up.
+        if (player.IsOnGround() || player.IsDead() ||
+            (!player.InWater() && !DiveToggle && !IsActuallyUnderwater(player)))
+        {
+            DiveToggle = false;
+            player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        float fixedDelta = Mathf.Max(dt, Time.fixedDeltaTime);
+        float depth = player.m_swimDepth;
+        float speed = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
+        bool directDive = IsDiveHeld();
+        bool surface = IsSurfaceHeld();
+
+        if (directDive && !surface)
+        {
+            depth += speed * fixedDelta;
+        }
+        else if (surface && !directDive)
+        {
+            depth -= speed * fixedDelta;
+        }
+        else if (DiveToggle)
+        {
+            // BetterDiving uses the look direction to control its target depth.
+            // Keep that behavior when the player looks up/down, but make the
+            // toggle itself descend instead of requiring a short input event to
+            // be observed by FixedUpdate. This is reliable with both keyboard
+            // and controller input and keeps the player underwater until the
+            // surface key/jump or an upward look is used.
+            if (___m_lookDir.y > 0.15f) depth -= speed * fixedDelta;
+            else depth += speed * fixedDelta;
+        }
+
+        player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
+        if (player.m_swimDepth > 2.5f && DiveToggle && IsForwardHeld()) player.SetMoveDir(___m_lookDir);
+
+        // BetterDiving keeps both native timers alive while the target is
+        // below the surface. This is what prevents the native controller from
+        // deciding that the player surfaced and applying the bounce impulse.
+        if (ShouldKeepNativeSwimming(player))
+        {
+            ___m_lastGroundTouch = 0.3f;
+            ___m_swimTimer = 0f;
+        }
+
+        if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || DiveToggle))
+            player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
+    }
+}
+
+// Input edge detection belongs in Player.Update. Reading GetButtonDown from a
+// fixed-update patch can miss the one rendered frame in which the button was
+// pressed, especially when the server/client frame and physics rates differ.
+[HarmonyPatch(typeof(Player), "Update")]
+internal static class DivingInputPatch
+{
+    private static void Prefix(Player __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
+            !__instance.InWater() || __instance.IsOnGround() || __instance.IsDead()) return;
+
+        if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
+            DivingPatch.DiveToggle = !DivingPatch.DiveToggle;
+    }
+}
+
+[HarmonyPatch(typeof(Character), "UpdateMotion")]
+internal static class DivingMotionPatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    {
+        if (__instance is not Player player) return;
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
+        if (player.IsOnGround() || player.IsDead())
+        {
+            player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        // This is the exact state BetterDiving maintains. Valheim's native
+        // UpdateSwimming applies an upward launch as soon as m_swimTimer is
+        // allowed to expire, even when m_swimDepth is still below the surface.
+        // Keep the native swimmer alive based on actual liquid depth, not the
+        // transient InWater() cache or the input toggle.
+        if (DivingPatch.IsActuallyUnderwater(player))
         {
             ___m_lastGroundTouch = 0.3f;
             ___m_swimTimer = 0f;
@@ -1493,177 +1622,7 @@ internal static class CurrencyUiPatch
     {
         if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) return;
         Plugin.CreatePocketUi(__instance);
-        Plugin.SchedulePocketUiReposition(__instance);
-        Plugin.UpdatePocketUi();
-    }
-}
-
-[HarmonyPatch(typeof(InventoryGui), "Awake")]
-internal static class CurrencyUiAwakePatch
-{
-    private static void Postfix(InventoryGui __instance)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) Plugin.CreatePocketUi(__instance);
-    }
-}
-
-[HarmonyPatch(typeof(Game), "Start")]
-internal static class SleepRpcRegistrationPatch
-{
-    private static ZRoutedRpc RegisteredRpc;
-
-    private static void Postfix()
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.SleepSkip) || ZRoutedRpc.instance == null) return;
-        if (RegisteredRpc == ZRoutedRpc.instance) return;
-        RegisteredRpc = ZRoutedRpc.instance;
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.OpenPopup), new Action<long>(SleepRpc.OpenPopup));
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteYes), new Action<long, long>(SleepRpc.VoteYes));
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteNo), new Action<long, long>(SleepRpc.VoteNo));
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.UpdateDisplay), new Action<long, string>(SleepRpc.UpdateDisplay));
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.Reset), new Action<long>(SleepRpc.Reset));
-        ZRoutedRpc.instance.Register(nameof(SleepRpc.Result), new Action<long, string>(SleepRpc.Result));
-    }
-}
-
-internal static class SleepRpc
-{
-    internal static void OpenPopup(long sender)
-    {
-        if (Player.m_localPlayer == null) return;
-        if (Plugin.SleepPopupOpen) return;
-        if (Plugin.SleepAutoAccept.Value)
-        {
-            Plugin.SleepPopupOpen = true;
-            Vote(true);
-            return;
-        }
-        Plugin.SleepPopupOpen = true;
-        UnifiedPopup.Push(new YesNoPopup("Skip the night?", Plugin.SleepVoteBody(), () => Vote(true), () => Vote(false)));
-    }
-
-    private static void Vote(bool yes)
-    {
-        if (ZRoutedRpc.instance == null) return;
-        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, yes ? nameof(VoteYes) : nameof(VoteNo), ZNet.GetUID());
-        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
-        Plugin.SleepPopupOpen = false;
-    }
-
-    internal static void VoteYes(long sender, long playerId)
-    {
-        if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-        Plugin.SleepYes.Add(playerId);
-        Plugin.SleepNo.Remove(playerId);
-    }
-
-    internal static void VoteNo(long sender, long playerId)
-    {
-        if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-        Plugin.SleepNo.Add(playerId);
-        Plugin.SleepYes.Remove(playerId);
-    }
-
-    internal static void UpdateDisplay(long sender, string data)
-    {
-        string[] parts = data.Split(',');
-        if (parts.Length != 5) return;
-        int.TryParse(parts[0], out Plugin.SleepInBed);
-        int.TryParse(parts[1], out Plugin.SleepYesCount);
-        int.TryParse(parts[2], out Plugin.SleepNoCount);
-        int.TryParse(parts[3], out Plugin.SleepWaiting);
-        int.TryParse(parts[4], out Plugin.SleepTotal);
-        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null && UnifiedPopup.instance.bodyText != null)
-            UnifiedPopup.instance.bodyText.text = Plugin.SleepVoteBody();
-    }
-
-    internal static void Reset(long sender)
-    {
-        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
-        Plugin.SleepPopupOpen = false;
-        Plugin.SleepYes.Clear();
-        Plugin.SleepNo.Clear();
-        Plugin.SleepPopupSent.Clear();
-        Plugin.SleepVoteActive = false;
-        Plugin.SleepVoteStarted = DateTime.MinValue;
-        Plugin.SleepWarningStarted = DateTime.MinValue;
-        Plugin.LastSleepDisplay = null;
-        Plugin.SleepInBed = Plugin.SleepYesCount = Plugin.SleepNoCount = Plugin.SleepWaiting = Plugin.SleepTotal = 0;
-    }
-
-    internal static void Result(long sender, string message)
-    {
-        if (Player.m_localPlayer != null) Player.m_localPlayer.Message(MessageHud.MessageType.Center, message);
-        Reset(sender);
-    }
-
-    internal static void BroadcastReset()
-    {
-        if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, nameof(Reset));
-        Reset(0);
-    }
-}
-
-[HarmonyPatch(typeof(Game), "EverybodyIsTryingToSleep")]
-internal static class SleepSkipPatch
-{
-    private static readonly HashSet<long> CurrentPlayers = new();
-    private static readonly HashSet<long> InBed = new();
-
-    private static bool Prefix(ref bool __result)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.SleepSkip) || ZNet.instance == null || !ZNet.instance.IsServer()) return true;
-        List<ZDO> characters = ZNet.instance.GetAllCharacterZDOS();
-        int total = characters.Count;
-        if (total <= 0) { __result = false; return false; }
-        InBed.Clear();
-        foreach (ZDO zdo in characters) if (zdo.GetBool(ZDOVars.s_inBed)) InBed.Add(zdo.m_uid.UserID);
-        int inBed = InBed.Count;
-        if (inBed == 0 || (Plugin.SleepCooldownSeconds.Value > 0 && Plugin.LastSleepCompleted != DateTime.MinValue && DateTime.UtcNow < Plugin.LastSleepCompleted.AddSeconds(Plugin.SleepCooldownSeconds.Value)))
-        {
-            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
-            __result = false;
-            return false;
-        }
-        if (inBed >= total || (total > 1 && inBed < Plugin.SleepPlayersNeeded.Value))
-        {
-            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
-            __result = inBed >= total;
-            return false;
-        }
-
-        DateTime now = DateTime.UtcNow;
-        if (Plugin.SleepWarningSeconds.Value > 0 && Plugin.SleepWarningStarted == DateTime.MinValue)
-        {
-            Plugin.SleepWarningStarted = now;
-            __result = false;
-            return false;
-        }
-        if (Plugin.SleepWarningSeconds.Value > 0 && now < Plugin.SleepWarningStarted.AddSeconds(Plugin.SleepWarningSeconds.Value))
-        {
-            __result = false;
-            return false;
-        }
-
-        CurrentPlayers.Clear();
-        foreach (ZNetPeer peer in ZNet.instance.m_peers) CurrentPlayers.Add(peer.m_characterID.UserID);
-        if (!ZNet.instance.IsDedicated()) CurrentPlayers.Add(ZNet.GetUID());
-        Plugin.SleepYes.IntersectWith(CurrentPlayers);
-        Plugin.SleepNo.IntersectWith(CurrentPlayers);
-        Plugin.SleepYes.ExceptWith(InBed);
-        Plugin.SleepNo.ExceptWith(InBed);
-
-        int explicitYes = Plugin.SleepYes.Count(id => !InBed.Contains(id));
-        int explicitNo = Plugin.SleepNo.Count(id => !InBed.Contains(id));
-        int waiting = Math.Max(0, total - inBed - explicitYes - explicitNo);
-        bool timedOut = Plugin.SleepVoteStarted != DateTime.MinValue && Plugin.SleepVoteTimeoutSeconds.Value > 0 && now >= Plugin.SleepVoteStarted.AddSeconds(Plugin.SleepVoteTimeoutSeconds.Value);
-        if (timedOut) waiting = 0;
-        int effectiveTotal = Math.Max(1, total - (timedOut ? Math.Max(0, total - inBed - explicitYes - explicitNo) : 0));
-        int yes = inBed + explicitYes;
-        Plugin.SleepInBed = inBed;
-        Plugin.SleepYesCount = explicitYes;
-        Plugin.SleepNoCount = explicitNo;
-        Plugin.SleepWaiting = waiting;
+      in.SleepWaiting = waiting;
         Plugin.SleepTotal = total;
 
         if (!Plugin.SleepVoteActive)
