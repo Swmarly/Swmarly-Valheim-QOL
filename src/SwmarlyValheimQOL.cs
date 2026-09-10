@@ -548,8 +548,8 @@ internal static class EquipWhileRunningPatch
             bool isRunningQuery = called != null && called.Name == nameof(Character.IsRunning) &&
                                   called.ReturnType == typeof(bool) &&
                                   (called.DeclaringType == typeof(Character) ||
-                                   operandText.Contains("Character.IsRunning", StringComparison.Ordinal) ||
-                                   operandText.Contains("Character::IsRunning", StringComparison.Ordinal));
+                                   operandText.IndexOf("Character.IsRunning", StringComparison.Ordinal) >= 0 ||
+                                   operandText.IndexOf("Character::IsRunning", StringComparison.Ordinal) >= 0);
             if (!isRunningQuery) continue;
 
             // EquipGearWhileRunning uses this same call-site patch. The run
@@ -960,7 +960,7 @@ internal static class NoAfkRaidsState
         // SetRandomEvent's last argument is its explicit/forced flag. Looking
         // at every bool would also classify unrelated future parameters as a
         // forced raid.
-        bool forced = args != null && args.Length > 0 && args[^1] is bool forcedArgument && forcedArgument;
+        bool forced = args != null && args.Length > 0 && args[args.Length - 1] is bool forcedArgument && forcedArgument;
         if (forced && !Plugin.IsFeatureEnabled(Plugin.BlockForcedRaids)) return false;
 
         List<ZDO> characters;
