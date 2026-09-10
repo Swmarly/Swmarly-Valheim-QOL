@@ -647,7 +647,7 @@ internal static class EternalFireState
 
     private static string NormalizeName(string name)
     {
-        return (name ?? string.Empty).Replace("(Clone)", string.Empty, StringComparison.Ordinal).Trim();
+        return (name ?? string.Empty).Replace("(Clone)", string.Empty).Trim();
     }
 }
 
@@ -747,7 +747,7 @@ internal static class AutoReplantState
 
     private static string NormalizeName(string name)
     {
-        return (name ?? string.Empty).Replace("(Clone)", string.Empty, StringComparison.Ordinal).Trim();
+        return (name ?? string.Empty).Replace("(Clone)", string.Empty).Trim();
     }
 }
 
