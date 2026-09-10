@@ -1,6 +1,6 @@
 {
   "name": "SwmarlyValheimQOL",
-  "version_number": "1.0.2",
+  "version_number": "1.0.3",
   "website_url": "https://github.com/Swmarly/Swmarly-Valheim-QOL",
   "description": "One configurable Valheim 1.0 quality-of-life mod combining floating items, water equipment, sleep voting, currency pocket, swimming improvements, sneak scaling, sitting regeneration, fleeing trash mobs, no rain wear, and no-stamina building tools.",
   "dependencies": [
