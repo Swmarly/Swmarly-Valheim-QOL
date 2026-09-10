@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace SwmarlyValheimQOL {
     internal static class MultiUserChestInventoryIgnore {
         internal static bool IgnoreInventory(this InventoryOwner owner) {
@@ -6,6 +8,9 @@ namespace SwmarlyValheimQOL {
         }
         internal static bool IgnoreInventory(this Container container) {
             return InventoryOwner.GetOwner(container?.GetInventory()).IgnoreInventory();
+        }
+        internal static IEnumerable<Inventory> GetInventories(this Inventory inventory) {
+            if (inventory != null) yield return inventory;
         }
     }
 }
