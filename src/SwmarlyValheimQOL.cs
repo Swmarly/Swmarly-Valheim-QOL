@@ -1610,6 +1610,11 @@ internal static class DivingPatch
         return player != null && player.m_swimDepth > 2.5f;
     }
 
+    internal static bool IsDiveStateActive(Player player)
+    {
+        return player != null && (DiveToggle || IsUnderwater || HasDiveTarget(player));
+    }
+
     internal static bool HasNativeSwimDepth(Player player)
     {
         if (player == null) return false;
@@ -1671,7 +1676,7 @@ internal static class DivingPatch
         // The cached liquid-depth value can briefly report false during the
         // transition below the surface; resetting m_swimDepth there restores
         // the vanilla 1.6 target and launches the player back up.
-        if ((player.IsOnGround() && !IsDiveGroundContact(player)) || player.IsDead())
+        if ((player.IsOnGround() && IsDiveStateActive(player) && !IsDiveGroundContact(player)) || player.IsDead())
         {
             ReleaseToWalking(player, ref ___m_swimTimer);
             return;
@@ -1824,7 +1829,7 @@ internal static class DivingMotionPatch
     {
         if (__instance is not Player player) return;
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
-        if ((player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
+        if ((player.IsOnGround() && DivingPatch.IsDiveStateActive(player) && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
         {
             DivingPatch.ReleaseToWalking(player, ref ___m_swimTimer);
             return;
