@@ -1610,6 +1610,18 @@ internal static class DivingPatch
         return player != null && player.m_swimDepth > 2.5f;
     }
 
+    internal static bool HasNativeSwimDepth(Player player)
+    {
+        if (player == null) return false;
+
+        // Mirrors Valheim 1.0 Character.InLiquidSwimDepth(): liquid depth
+        // must exceed the requested swim depth minus 0.4 metres. This lets a
+        // diver remain on a genuinely deep seabed while a shoreline can hand
+        // control back to normal walking.
+        float liquidDepth = Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y);
+        return liquidDepth > Mathf.Max(0f, player.m_swimDepth - 0.4f);
+    }
+
     internal static bool IsActuallyUnderwater(Player player)
     {
         return player != null && (!player.IsOnGround() || IsDiveGroundContact(player)) && !player.IsDead() &&
@@ -1627,7 +1639,20 @@ internal static class DivingPatch
     {
         return player != null && player.IsOnGround() &&
                (DiveToggle || IsUnderwater || HasDiveTarget(player)) &&
-               (Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.01f || player.InWater());
+               HasNativeSwimDepth(player);
+    }
+
+    internal static void ReleaseToWalking(Player player, ref float swimTimer)
+    {
+        DiveToggle = false;
+        IsUnderwater = false;
+        LastRequestedDepth = 1.6f;
+        player.m_swimDepth = 1.6f;
+
+        // Character.IsSwimming() is m_swimTimer < 0.5f. Set the exact native
+        // boundary so UpdateMotion selects UpdateWalking immediately instead
+        // of running one more swimming frame and reasserting the dive state.
+        swimTimer = 0.5f;
     }
 
     internal static bool ShouldKeepNativeSwimming(Player player)
@@ -1648,9 +1673,7 @@ internal static class DivingPatch
         // the vanilla 1.6 target and launches the player back up.
         if ((player.IsOnGround() && !IsDiveGroundContact(player)) || player.IsDead())
         {
-            DiveToggle = false;
-            IsUnderwater = false;
-            player.m_swimDepth = 1.6f;
+            ReleaseToWalking(player, ref ___m_swimTimer);
             return;
         }
 
@@ -1803,8 +1826,7 @@ internal static class DivingMotionPatch
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
         if ((player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
         {
-            DivingPatch.IsUnderwater = false;
-            player.m_swimDepth = 1.6f;
+            DivingPatch.ReleaseToWalking(player, ref ___m_swimTimer);
             return;
         }
 
