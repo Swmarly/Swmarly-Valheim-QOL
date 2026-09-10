@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+- Fixed hotbar equipment while running by handling both Valheim movement flags and the central `UseItem`/`EquipItem` paths.
+- Fixed swimming equipment by bypassing the native swim gate only for the equip transaction, then restoring the real swim state.
+- Fixed diving by using held keys and applying vertical velocity after native swimming physics.
+- Fixed currency pocket placement with rendered UI bounds instead of an expanded-inventory hardcoded offset.
+- Added a deposit button and drag-and-drop coin deposit from the normal inventory.
+- Allowed coin autopickup when normal inventory space is full and persisted the dedicated-server config before patch registration.
+- Improved sleep vote cleanup and late-joiner popup delivery.
+
 ## 1.0.2
 
 - Fixed hotbar equipment while running by bypassing the actual movement-state equip gate.
