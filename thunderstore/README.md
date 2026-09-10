@@ -15,12 +15,15 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 - Configurable trash mobs flee on sight.
 - Uncovered structures no longer take rain wear.
 - No stamina cost for hammer, hoe, and cultivator by default; an all-actions mode is available.
+- Multiple players can open the same chest together, using the No-Chest-Block/MultiUserChest open/stack behavior.
+- SpeedyPaths-style dirt/stone path and structure movement bonuses, with no running stamina usage on dirt and stone paths by default.
+- Server-side NoAFKRaids behavior: random raids are blocked when all connected players have been stationary for the configured AFK period.
 
 ## Installation
 
 Install the package with r2modman/Thunderstore Mod Manager, or extract the contents into the Valheim game directory so the DLL is under `BepInEx/plugins`.
 
-For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting uses the server for the decision and clients for the vote popup, while equipment-in-water, running hotbar equipment, and the currency-pocket UI require the client copy.
+For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting, chest sharing, and NoAFKRaids use the server for authority, while equipment-in-water, running hotbar equipment, SpeedyPaths movement, diving, and the currency-pocket UI require the client copy.
 
 The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; click the pocket or use the down arrow to move normal-inventory coins into it, use the up arrow to extract all pocket coins, or drag a coin stack onto the pocket. The panel removes duplicate copies and is positioned from the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
 
@@ -32,7 +35,7 @@ Do not install duplicate copies of the individual mods at the same time. Their o
 
 ## Compatibility
 
-Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
+Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, chest open/stack access, NoAFKRaids, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
 
 ## Credits
 
