@@ -2,6 +2,10 @@
 
 ## 1.0.3
 
+- Audit pass against the current SleepSkip, Use Equipment in Water, EquipGearWhileRunning, VikingsDoSwim/BetterDiving, CurrencyPocket, SpeedyPaths, MultiUserChest, NoAFKRaids, and NoRainDamage implementations.
+- Hardened deferred hotbar equip transactions, moved the currency card between Armor/Weight, added true drag-drop coin deposit, and marked consumed coin drops in their network ZDO to prevent duplicate pocket credit.
+- Applied the diving camera water override before and after the camera solve, added cultivated-ground SpeedyPaths settings, and made AFK raid protection use active connections and event radius when available.
+
 - Added No-Chest-Block/MultiUserChest-style simultaneous chest opening and stack acknowledgment.
 - Added SpeedyPaths-style ground detection, movement multipliers, and configurable no-stamina dirt/stone paths.
 - Added dedicated-server NoAFKRaids protection based on authoritative player movement positions.
