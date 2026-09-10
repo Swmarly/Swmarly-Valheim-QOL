@@ -1,11 +1,5 @@
 # Changelog
 
-## 1.0.4
-
-- Fixed sleep-vote registration across world reloads and stopped stale warning/vote state from carrying into the next vote.
-- Removed repeated sleep-display RPC spam and update the open vote body when counts change.
-- Removed in-bed players from explicit vote sets and continued notifying eligible late joiners.
-
 ## 1.0.3
 
 - Fixed hotbar equipment while running by handling both Valheim movement flags and the central `UseItem`/`EquipItem` paths.
@@ -15,6 +9,9 @@
 - Added a deposit button and drag-and-drop coin deposit from the normal inventory.
 - Allowed coin autopickup when normal inventory space is full and persisted the dedicated-server config before patch registration.
 - Improved sleep vote cleanup and late-joiner popup delivery.
+- Fixed sleep-vote registration across world reloads and stopped stale warning/vote state from carrying into the next vote.
+- Removed repeated sleep-display RPC spam and updated the open vote body when counts change.
+- Removed in-bed players from explicit vote sets and continued notifying eligible late joiners.
 
 ## 1.0.2
 
