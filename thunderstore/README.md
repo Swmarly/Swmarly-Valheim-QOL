@@ -5,11 +5,11 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 ## Included features
 
 - Dropped items float using Valheim's native `Floating` physics.
-- Equipment can be equipped while swimming.
-- Hotbar equipment can be used while running.
+- Equipment can be equipped while swimming, including the equipment-update transaction used by Valheim's water restriction.
+- Hotbar equipment can be used while running; both the run-intent and actual-running flags are handled.
 - Sleep-skip voting with percentage, warning, timeout, cooldown, and solo-server handling.
 - Currency pocket: picked-up coins are stored on the player and are counted by traders.
-- Swimming skill speed scaling, idle stamina regeneration, swim sprint, and configurable diving.
+- Swimming skill speed scaling, idle stamina regeneration, swim sprint, and configurable diving. Dive/surface keys are held and applied after native swimming physics.
 - Sneak speed scales with the Sneak skill.
 - Health regeneration while sitting.
 - Configurable trash mobs flee on sight.
@@ -22,7 +22,7 @@ Install the package with r2modman/Thunderstore Mod Manager, or extract the conte
 
 For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting uses the server for the decision and clients for the vote popup, while equipment-in-water, running hotbar equipment, and the currency-pocket UI require the client copy.
 
-The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; use the small arrow on the pocket to move them back into normal inventory slots. The pocket is laid out after common expanded-inventory mods finish their UI layout.
+The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; use the down arrow to move normal-inventory coins into the pocket, the up arrow to extract all pocket coins, or drag a coin stack onto the pocket. The pocket is positioned from the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
 
 When updating, remove the old `SwmarlyValheimQOL.dll`/package copy first if your manager leaves duplicate plugin versions behind, then install the new package on both the server and all clients. Do not keep two copies of this mod in different plugin folders.
 
@@ -32,7 +32,7 @@ Do not install duplicate copies of the individual mods at the same time. Their o
 
 ## Compatibility
 
-Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency.
+Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
 
 ## Credits
 
