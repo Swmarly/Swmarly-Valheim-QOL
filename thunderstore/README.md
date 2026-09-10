@@ -6,10 +6,10 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 
 - Dropped items float using Valheim's native `Floating` physics.
 - Equipment can be equipped while swimming, including the equipment-update transaction used by Valheim's water restriction.
-- Hotbar equipment can be used while running; both the run-intent and actual-running flags are handled.
+- Hotbar equipment can be used while running; the vanilla `Player.CheckRun` equip gate is removed without changing movement speed or sprint state.
 - Sleep-skip voting with percentage, warning, timeout, cooldown, and solo-server handling.
 - Currency pocket: picked-up coins are stored on the player and are counted by traders.
-- Swimming skill speed scaling, idle stamina regeneration, swim sprint, and configurable diving. Hold the configured Dive key (or crouch) to descend and the configured Surface key (or jump) to return toward the surface.
+- Swimming skill speed scaling, idle stamina regeneration, swim sprint, and configurable diving. Hold the configured Dive key (or crouch) to descend and the configured Surface key (or jump) to return toward the surface; the native swim timers and camera water clamp are held correctly while below the surface.
 - Sneak speed scales with the Sneak skill.
 - Health regeneration while sitting.
 - Configurable trash mobs flee on sight.
