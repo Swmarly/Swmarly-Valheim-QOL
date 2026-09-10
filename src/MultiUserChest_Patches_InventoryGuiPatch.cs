@@ -49,15 +49,26 @@ namespace SwmarlyValheimQOL {
         [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateContainer)), HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> ChangeOwnerCheck(IEnumerable<CodeInstruction> instructions) {
             if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return instructions;
-            // any player can potentially open a container, thus the IsOwner() statement need to be changed
-            return new CodeMatcher(instructions)
-                   .MatchForward(true,
-                                 new CodeMatch(OpCodes.Ldarg_0),
-                                 new CodeMatch(i => i.opcode == OpCodes.Ldfld && ((FieldInfo)i.operand).Name == "m_currentContainer"),
-                                 new CodeMatch(i => i.opcode == OpCodes.Callvirt && ((MethodInfo)i.operand).Name == "IsOwner"))
-                   .RemoveInstructions(1)
-                   .Insert(new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(InventoryGuiPatch), nameof(CanOpenContainer))))
-                   .InstructionEnumeration();
+
+            try {
+                CodeMatcher matcher = new CodeMatcher(instructions);
+                matcher.MatchForward(true,
+                    new CodeMatch(OpCodes.Ldarg_0),
+                    new CodeMatch(i => i.opcode == OpCodes.Ldfld && i.operand is FieldInfo field && field.Name == "m_currentContainer"),
+                    new CodeMatch(i => (i.opcode == OpCodes.Call || i.opcode == OpCodes.Callvirt) && i.operand is MethodInfo method && method.Name == "IsOwner"));
+
+                if (!matcher.IsValid) {
+                    Plugin.LogWarning("Multi-user chest: UpdateContainer owner check was not found; using the guarded Container.IsOwner fallback.");
+                    return instructions;
+                }
+
+                matcher.RemoveInstructions(1);
+                matcher.Insert(new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(InventoryGuiPatch), nameof(CanOpenContainer))));
+                return matcher.InstructionEnumeration();
+            } catch (System.Exception exception) {
+                Plugin.LogWarning($"Multi-user chest: UpdateContainer transpiler skipped safely: {exception.Message}");
+                return instructions;
+            }
         }
 
         public static bool CanOpenContainer(Container container) {
