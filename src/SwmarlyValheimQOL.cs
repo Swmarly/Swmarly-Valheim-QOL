@@ -41,6 +41,9 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> SpeedyPaths;
     internal static ConfigEntry<bool> NoStaminaOnPaths;
     internal static ConfigEntry<bool> NoAfkRaids;
+    internal static ConfigEntry<bool> EternalFires;
+    internal static ConfigEntry<bool> AutoReplantTrees;
+    internal static ConfigEntry<bool> AutoRepairAtWorkbench;
 
     internal static ConfigEntry<float> FloatForce;
     internal static ConfigEntry<float> FloatDamping;
@@ -69,6 +72,9 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<float> AfkMovementThreshold;
     internal static ConfigEntry<float> AfkProtectionRadius;
     internal static ConfigEntry<bool> BlockForcedRaids;
+    internal static ConfigEntry<string> EternalFirePrefabs;
+    internal static ConfigEntry<string> TreeReplantMappings;
+    internal static ConfigEntry<float> TreeReplantDelaySeconds;
 
     internal static ConfigEntry<int> SleepPercent;
     internal static ConfigEntry<int> SleepPlayersNeeded;
@@ -144,9 +150,16 @@ public sealed class Plugin : BaseUnityPlugin
         SpeedyPaths = Config.Bind("Features", "Speedy paths", true, "Apply SpeedyPaths-style movement bonuses to paths and common building surfaces.");
         NoStaminaOnPaths = Config.Bind("Features", "No stamina on paths", true, "Remove running stamina drain while standing on a dirt or stone path.");
         NoAfkRaids = Config.Bind("Features", "No AFK raids", true, "Prevent random raids while all connected players have been stationary for the configured AFK period.");
+        EternalFires = Config.Bind("Features", "Eternal fires and lights", true, "Keep configured fireplaces and lights at full fuel without refueling.");
+        AutoReplantTrees = Config.Bind("Features", "Automatically replant trees", true, "Plant the matching sapling after a supported tree stump is destroyed.");
+        AutoRepairAtWorkbench = Config.Bind("Features", "Auto repair at workbenches", true, "Repair every item the opened crafting station can repair.");
 
         FloatForce = Config.Bind("Floating items", "Buoyancy force", 0.5f, new ConfigDescription("Native Floating force applied below the surface.", new AcceptableValueRange<float>(0.05f, 3f)));
         FloatDamping = Config.Bind("Floating items", "Damping", 0.05f, new ConfigDescription("Velocity damping while an item is floating.", new AcceptableValueRange<float>(0f, 0.5f)));
+        EternalFirePrefabs = Config.Bind("Eternal fires and lights", "Prefab names", "fire_pit,fire_pit_iron,fire_pit_hildir,bonfire,hearth,piece_walltorch,piece_groundtorch,piece_groundtorch_wood,piece_groundtorch_green,piece_groundtorch_blue,piece_brazierfloor01,piece_brazierfloor02,piece_brazierceiling01,piece_jackoturnip", "Comma-separated Fireplace prefab names that should never run out of fuel. Add compatible modded Fireplace prefab names here.");
+
+        TreeReplantMappings = Config.Bind("Automatic tree replanting", "Stump to sapling mappings", "Beech_Stub=Beech_Sapling,Beech1_Stub=Beech_Sapling,FirTree_Stub=FirTree_Sapling,Pinetree_01_Stub=PineTree_Sapling,BirchStub=Birch_Sapling,OakStub=Oak_Sapling", "Comma-separated stump=sapling mappings. Only mapped stumps are replanted; this prevents the wrong tree type from being created.");
+        TreeReplantDelaySeconds = Config.Bind("Automatic tree replanting", "Replant delay seconds", 2.5f, new ConfigDescription("Server-side delay before the matching sapling is spawned.", new AcceptableValueRange<float>(0f, 60f)));
 
         MaxSwimSpeedMultiplier = Config.Bind("Swimming", "Maximum swim speed multiplier", 1.5f, new ConfigDescription("Multiplier at 100 Swim skill.", new AcceptableValueRange<float>(0.5f, 3f)));
         SwimIdleStaminaPerSecond = Config.Bind("Swimming", "Idle stamina regeneration per second", 2f, new ConfigDescription("Stamina restored while swimming nearly still.", new AcceptableValueRange<float>(0f, 20f)));
@@ -586,6 +599,194 @@ internal static class FloatingItemsStartPatch
     {
         // Some network-spawned drops receive their ZNetView after Awake.
         FloatingItemsPatch.EnsureFloating(__instance);
+    }
+}
+
+internal static class EternalFireState
+{
+    private static string CachedPrefabConfig;
+    private static readonly HashSet<string> ConfiguredPrefabs = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static bool IsConfigured(string rawName)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EternalFires)) return false;
+
+        string config = Plugin.EternalFirePrefabs?.Value ?? string.Empty;
+        if (!string.Equals(config, CachedPrefabConfig, StringComparison.Ordinal))
+        {
+            CachedPrefabConfig = config;
+            ConfiguredPrefabs.Clear();
+            foreach (string entry in config.Split(','))
+            {
+                string name = NormalizeName(entry);
+                if (!string.IsNullOrEmpty(name)) ConfiguredPrefabs.Add(name);
+            }
+        }
+
+        return ConfiguredPrefabs.Contains(NormalizeName(rawName));
+    }
+
+    internal static void KeepFuel(Fireplace fireplace, ZNetView nview)
+    {
+        if (fireplace == null || nview == null || !IsConfigured(fireplace.name) || !nview.IsValid() || !nview.IsOwner()) return;
+        ZDO zdo = nview.GetZDO();
+        if (zdo == null || fireplace.m_maxFuel <= 0f) return;
+
+        // Only write when the synchronized value has actually fallen. This
+        // keeps eternal lights cheap even in bases with many fireplaces and
+        // avoids broadcasting the same ZDO value every frame.
+        if (zdo.GetFloat("fuel", 0f) < fireplace.m_maxFuel - 0.01f)
+            zdo.Set("fuel", fireplace.m_maxFuel);
+    }
+
+    internal static void ForceSetFuel(Fireplace fireplace, ref float fuel)
+    {
+        if (fireplace != null && IsConfigured(fireplace.name) && fireplace.m_maxFuel > 0f)
+            fuel = fireplace.m_maxFuel;
+    }
+
+    private static string NormalizeName(string name)
+    {
+        return (name ?? string.Empty).Replace("(Clone)", string.Empty, StringComparison.Ordinal).Trim();
+    }
+}
+
+// Fireplace owns Valheim's native fuel value for campfires, hearths, braziers,
+// torches, and the other light pieces. Updating the ZDO on its owner makes the
+// result authoritative in multiplayer; clients receive the normal synchronized
+// fuel state and do not need a second custom network protocol.
+[HarmonyPatch(typeof(Fireplace), nameof(Fireplace.UpdateFireplace))]
+internal static class EternalFireUpdatePatch
+{
+    private static void Prefix(Fireplace __instance, ZNetView ___m_nview)
+    {
+        EternalFireState.KeepFuel(__instance, ___m_nview);
+    }
+}
+
+[HarmonyPatch(typeof(Fireplace), nameof(Fireplace.SetFuel))]
+internal static class EternalFireSetFuelPatch
+{
+    private static void Prefix(Fireplace __instance, ref float fuel)
+    {
+        EternalFireState.ForceSetFuel(__instance, ref fuel);
+    }
+}
+
+internal static class AutoReplantState
+{
+    private const string ReplantScheduledKey = "SwmarlyValheimQOL_ReplantScheduled";
+    private static readonly HashSet<int> PendingInstances = new();
+
+    internal static void OnStumpDestroyed(Destructible destructible)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.AutoReplantTrees) || destructible == null ||
+            ZNet.instance == null || !ZNet.instance.IsServer() || ZNetScene.instance == null)
+            return;
+
+        if (!TryGetSaplingPrefab(destructible.name, out string saplingName)) return;
+        GameObject sapling = ZNetScene.instance.GetPrefab(saplingName);
+        if (sapling == null)
+        {
+            Plugin.LogWarning($"Automatic tree replanting could not find sapling prefab '{saplingName}' for stump '{destructible.name}'.");
+            return;
+        }
+
+        ZNetView nview = destructible.GetComponent<ZNetView>() ?? destructible.GetComponentInParent<ZNetView>();
+        ZDO zdo = nview?.GetZDO();
+        if (zdo != null)
+        {
+            if (zdo.GetBool(ReplantScheduledKey)) return;
+            zdo.Set(ReplantScheduledKey, true);
+        }
+
+        if (!PendingInstances.Add(destructible.GetInstanceID())) return;
+        Vector3 position = destructible.transform.position;
+        Quaternion rotation = Quaternion.Euler(0f, destructible.transform.eulerAngles.y, 0f);
+        Plugin.Instance.StartCoroutine(SpawnSaplingAfterDelay(saplingName, position, rotation, destructible.GetInstanceID()));
+    }
+
+    private static bool TryGetSaplingPrefab(string stumpName, out string saplingName)
+    {
+        string normalizedStump = NormalizeName(stumpName);
+        saplingName = null;
+        string mappings = Plugin.TreeReplantMappings?.Value ?? string.Empty;
+        foreach (string entry in mappings.Split(','))
+        {
+            string[] pair = entry.Split(new[] { '=', ':' }, 2);
+            if (pair.Length != 2) continue;
+            string stump = NormalizeName(pair[0]);
+            string sapling = NormalizeName(pair[1]);
+            if (stump.Length == 0 || sapling.Length == 0) continue;
+            if (normalizedStump.Equals(stump, StringComparison.OrdinalIgnoreCase) ||
+                normalizedStump.StartsWith(stump, StringComparison.OrdinalIgnoreCase))
+            {
+                saplingName = sapling;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerator SpawnSaplingAfterDelay(string prefabName, Vector3 position, Quaternion rotation, int instanceId)
+    {
+        yield return new WaitForSeconds(Mathf.Max(0f, Plugin.TreeReplantDelaySeconds.Value));
+        PendingInstances.Remove(instanceId);
+
+        if (ZNet.instance == null || !ZNet.instance.IsServer() || ZNetScene.instance == null) yield break;
+        GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
+        if (prefab == null) yield break;
+
+        // ZNetScene.SpawnObject is Valheim's server-authoritative spawn path.
+        // Object.Instantiate would create a local-only sapling on a dedicated
+        // server and is the reason many client-only tree replant patches fail
+        // to replicate in multiplayer.
+        ZNetScene.instance.SpawnObject(position, rotation, prefab);
+    }
+
+    private static string NormalizeName(string name)
+    {
+        return (name ?? string.Empty).Replace("(Clone)", string.Empty, StringComparison.Ordinal).Trim();
+    }
+}
+
+[HarmonyPatch(typeof(Destructible), nameof(Destructible.Destroy))]
+internal static class AutoReplantTreePatch
+{
+    private static void Prefix(Destructible __instance)
+    {
+        AutoReplantState.OnStumpDestroyed(__instance);
+    }
+}
+
+// Valheim's native HaveRepairableItems/RepairOneItem pair already knows how
+// to repair weapons, tools, armor, bows, shields, and modded items that use
+// the normal ItemDrop durability fields. Running the same loop used by the
+// established AutoRepair/ValheimPlus implementations from UpdateRepair keeps
+// the crafting-station level checks and all station types intact.
+[HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRepair))]
+internal static class AutoRepairAtWorkbenchPatch
+{
+    private static void Prefix(InventoryGui __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.AutoRepairAtWorkbench) || __instance == null || Player.m_localPlayer == null) return;
+
+        CraftingStation station = Player.m_localPlayer.GetCurrentCraftingStation();
+        if (station == null) return;
+
+        int repaired = 0;
+        // The inventory cannot contain anywhere near this many distinct
+        // repairable entries in vanilla. The cap is a defensive guard against
+        // a broken third-party item whose repair state never changes.
+        while (repaired < 1024 && __instance.HaveRepairableItems())
+        {
+            __instance.RepairOneItem();
+            repaired++;
+        }
+
+        if (repaired > 0)
+            station.m_repairItemDoneEffects.Create(station.transform.position, Quaternion.identity, null, 1f);
     }
 }
 

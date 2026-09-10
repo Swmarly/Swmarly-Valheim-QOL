@@ -15,6 +15,9 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 - Configurable trash mobs flee on sight.
 - Uncovered structures no longer take rain wear.
 - No stamina cost for hammer, hoe, and cultivator by default; an all-actions mode is available.
+- Configurable eternal fuel for native campfires, hearths, braziers, torches, and other configured `Fireplace` pieces. The server maintains the synchronized fuel value, so the light stays lit for every player.
+- Configurable automatic replanting for supported tree stumps. The default mappings replant Beech, Fir, Pine, Birch, and Oak with their matching saplings; custom `stump=sapling` mappings are supported for compatible tree mods.
+- Configurable automatic repair when a workbench/crafting station is open. It uses Valheim's native repair eligibility checks and repairs every eligible weapon, tool, armor, bow, shield, and normal durability item the station can handle.
 - Multiple players can open and interact with the same chest together, including wagon inventories. Chest item moves are routed through an authoritative server-owner transaction layer so simultaneous moves are accepted or rejected without client-side duplicate inventories.
 - SpeedyPaths-style dirt/stone path and structure movement bonuses, with no running stamina usage on dirt and stone paths by default.
 - Server-side NoAFKRaids behavior: random raids are blocked when an AFK player is within the configured event protection radius; if Valheim does not expose an event position, it safely falls back to blocking only when all connected players are AFK.
@@ -31,11 +34,20 @@ When updating, remove the old `SwmarlyValheimQOL.dll`/package copy first if your
 
 Every feature is enabled by default.
 
+The new settings are created in `BepInEx/config/Swmarly.ValheimQOL.cfg`:
+
+- `Features / Eternal fires and lights`
+- `Features / Automatically replant trees`
+- `Features / Auto repair at workbenches`
+- `Eternal fires and lights / Prefab names` controls exactly which native or compatible `Fireplace` prefab names stay fueled.
+- `Automatic tree replanting / Stump to sapling mappings` controls the exact stump-to-sapling pairs. The feature never chooses a random tree.
+- `Automatic tree replanting / Replant delay seconds` controls the server-side spawn delay.
+
 Do not install duplicate copies of the individual mods at the same time. Their overlapping patches can cancel each other out.
 
 ## Compatibility
 
-Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The mod intentionally has no Jötunn or ServerSync dependency. Server-authoritative features (sleep voting, chest open/stack and item transactions, NoAFKRaids, coin pickup state, floating drops, rain wear, and fleeing behavior) run on the server; client features are owner-local and require the same package on every client.
+Built against the Valheim 1.0 dedicated-server assemblies and BepInExPack Valheim 5.4.2350. The only Thunderstore dependency is BepInExPack Valheim; Jötunn, ServerSync, and Server_devcommands are not required. Eternal fuel and tree spawning are server-authoritative, while automatic repair runs for each local player through Valheim's normal inventory synchronization. Install the same package on the dedicated server and every client for the complete feature set.
 
 ## Credits
 

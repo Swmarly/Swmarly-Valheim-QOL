@@ -2,6 +2,11 @@
 
 ## 1.0.3
 
+- Added configurable eternal fuel for native campfires, hearths, braziers, torches, and other `Fireplace` pieces using the synchronized ZDO fuel value.
+- Added server-authoritative stump-to-sapling replanting with exact mappings for the supported vanilla tree types; no random or mismatched saplings are selected.
+- Added native workbench auto-repair for every item the current station can repair, including armor, tools, weapons, bows, and shields.
+- Kept the package at version 1.0.3 and kept BepInExPack Valheim as the only dependency.
+
 - Audit pass against the current SleepSkip, Use Equipment in Water, EquipGearWhileRunning, VikingsDoSwim/BetterDiving, CurrencyPocket, SpeedyPaths, MultiUserChest, NoAFKRaids, and NoRainDamage implementations.
 - Hardened deferred hotbar equip transactions, moved the currency card between Armor/Weight, added true drag-drop coin deposit, and marked consumed coin drops in their network ZDO to prevent duplicate pocket credit.
 - Applied the diving camera water override before and after the camera solve, added cultivated-ground SpeedyPaths settings, and made AFK raid protection use active connections and event radius when available.

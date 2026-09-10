@@ -17,5 +17,8 @@ Swmarly Valheim QOL is a clean reimplementation. It does not ship code or assets
 - MultiUserChest / No-Chest-Block — https://github.com/MSchmoecker/No-Chest-Block
 - SpeedyPaths — https://github.com/NNaso/ValheimMods/tree/main/SpeedyPaths
 - NoAFKRaids — https://old.thunderstore.io/c/valheim/p/Dumba/NoAFKRaids/
+- Eternal fire behavior reference — https://github.com/Digitalroot-Valheim/Digitalroot.Valheim.EternalFire
+- Correct stump-to-sapling mapping reference — https://github.com/TastyChickenLegs/TreesReborn
+- Native workbench repair loop reference — https://github.com/valheimPlus/ValheimPlus/blob/24fd70709f5b48affcb337a9ddb1d185330e4d3a/ValheimPlus/GameClasses/InventoryGUI.cs
 
 All feature names and links are provided for attribution and compatibility context. Individual authors retain their own rights and licenses.
