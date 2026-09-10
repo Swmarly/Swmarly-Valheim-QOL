@@ -15,7 +15,7 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 - Configurable trash mobs flee on sight.
 - Uncovered structures no longer take rain wear.
 - No stamina cost for hammer, hoe, and cultivator by default; an all-actions mode is available.
-- Multiple players can open the same chest together, using the No-Chest-Block/MultiUserChest open/stack behavior, including wagon inventories. Chest ownership and vanilla inventory transactions remain server-authoritative; this feature does not create a client-side duplicate inventory.
+- Multiple players can open and interact with the same chest together, including wagon inventories. Chest item moves are routed through an authoritative server-owner transaction layer so simultaneous moves are accepted or rejected without client-side duplicate inventories.
 - SpeedyPaths-style dirt/stone path and structure movement bonuses, with no running stamina usage on dirt and stone paths by default.
 - Server-side NoAFKRaids behavior: random raids are blocked when an AFK player is within the configured event protection radius; if Valheim does not expose an event position, it safely falls back to blocking only when all connected players are AFK.
 
