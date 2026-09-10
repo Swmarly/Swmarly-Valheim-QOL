@@ -1619,12 +1619,13 @@ internal static class DivingPatch
     {
         if (player == null) return false;
 
-        // Mirrors Valheim 1.0 Character.InLiquidSwimDepth(): liquid depth
-        // must exceed the requested swim depth minus 0.4 metres. This lets a
-        // diver remain on a genuinely deep seabed while a shoreline can hand
-        // control back to normal walking.
+        // Use the normal surface-swim target for the ground transition, not
+        // the current dive target. A dive target can be below the seabed; it
+        // must never make a real underwater dive look like land and trigger
+        // the upward surface reset.
+        const float surfaceSwimDepth = 1.6f;
         float liquidDepth = Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y);
-        return liquidDepth > Mathf.Max(0f, player.m_swimDepth - 0.4f);
+        return liquidDepth > surfaceSwimDepth - 0.4f;
     }
 
     internal static bool IsActuallyUnderwater(Player player)
