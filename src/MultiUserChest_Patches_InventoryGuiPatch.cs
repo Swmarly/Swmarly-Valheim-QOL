@@ -100,8 +100,23 @@ namespace SwmarlyValheimQOL {
             __runOriginal = false;
         }
 
-        [HarmonyPatch(typeof(Inventory), nameof(Inventory.Load)), HarmonyPostfix]
+        // Valheim 1.0 has two Inventory.Load overloads:
+        //   Load(ZPackage)
+        //   Load(ZPackage, bool)
+        // Naming only the method is ambiguous and makes Harmony abort
+        // PatchAll(). Keep both overloads explicit so the rest of the QOL
+        // patches are registered instead of silently being skipped.
+        [HarmonyPatch(typeof(Inventory), nameof(Inventory.Load), new[] { typeof(ZPackage) }), HarmonyPostfix]
         public static void InventorySelectSameItemAfterLoad(Inventory __instance) {
+            SelectSameItemAfterLoad(__instance);
+        }
+
+        [HarmonyPatch(typeof(Inventory), nameof(Inventory.Load), new[] { typeof(ZPackage), typeof(bool) }), HarmonyPostfix]
+        public static void InventorySelectSameItemAfterLoadWithOptions(Inventory __instance) {
+            SelectSameItemAfterLoad(__instance);
+        }
+
+        private static void SelectSameItemAfterLoad(Inventory __instance) {
             if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!InventoryGui.instance || InventoryGui.instance.m_dragItem == null) {
                 return;
