@@ -101,6 +101,11 @@ public sealed class Plugin : BaseUnityPlugin
         Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
     }
 
+    internal static void LogWarning(string message)
+    {
+        Instance?.Logger.LogWarning(message);
+    }
+
     private void BindConfig()
     {
         FloatItems = Config.Bind("Features", "Float dropped items", true, "Make dropped items use Valheim's native floating physics in water.");
@@ -518,7 +523,7 @@ internal static class EquipWhileRunningPatch
         }
 
         if (removedChecks == 0)
-            Plugin.Instance?.Logger.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected Character.IsRunning call.");
+            Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected Character.IsRunning call.");
         return code;
     }
 }
