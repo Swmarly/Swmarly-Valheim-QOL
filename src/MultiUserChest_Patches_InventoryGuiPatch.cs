@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
@@ -135,7 +136,7 @@ namespace SwmarlyValheimQOL {
             }
 
             foreach (InventoryElement element in __instance.m_elements) {
-                if (!preview.GetSlot(element.m_pos, out ItemDrop.ItemData item)) {
+                if (!preview.GetSlot(element.Position, out ItemDrop.ItemData item)) {
                     continue;
                 }
 
