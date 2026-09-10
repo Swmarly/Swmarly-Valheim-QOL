@@ -1776,20 +1776,8 @@ internal static class DivingNativeSwimmingStatePatch
             (player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
             return true;
 
-        bool controlledDive = DivingPatch.IsUnderwater || DivingPatch.DiveToggle || DivingPatch.HasDiveTarget(player);
-        if (!controlledDive)
-        {
-            // Once shallow ground released the player to walking, a jump must
-            // not let the native timer re-enter swimming in the same shallow
-            // water. Native swimming is allowed again only when its own depth
-            // threshold is actually available.
-            if (!DivingPatch.HasNativeSwimDepth(player))
-            {
-                __result = false;
-                return false;
-            }
+        if (!DivingPatch.IsUnderwater && !DivingPatch.DiveToggle && !DivingPatch.HasDiveTarget(player))
             return true;
-        }
 
         // Do not pin the state after the player has actually left the liquid;
         // CustomFixedUpdate will clear the persistent flags on its next pass.
