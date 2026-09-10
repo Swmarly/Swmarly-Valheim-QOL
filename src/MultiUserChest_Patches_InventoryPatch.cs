@@ -56,7 +56,7 @@ namespace SwmarlyValheimQOL {
 
             InventoryOwner owner = InventoryOwner.GetOwner(__instance);
 
-            if (owner.IgnoreInventory()) {
+            if (owner == null || owner.IgnoreInventory()) {
                 return;
             }
 
