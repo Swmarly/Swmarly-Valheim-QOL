@@ -5,6 +5,7 @@ namespace SwmarlyValheimQOL {
     public static class GamePatches {
         [HarmonyPatch(typeof(Game), nameof(Game.Start)), HarmonyPostfix]
         public static void GameStartPatch() {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             RegisterRPCs();
         }
 
@@ -31,4 +32,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
