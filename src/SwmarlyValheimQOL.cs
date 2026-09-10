@@ -60,6 +60,7 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal const string CoinKey = "SwmarlyValheimQOL_Coins";
     internal const string LegacyCoinKey = "CoinPocket_CoinCount";
+    internal const string CoinMigrationKey = "SwmarlyValheimQOL_CoinMigrationComplete";
     internal const string CoinPrefab = "Coins";
     internal const string CoinToken = "$item_coins";
     internal const string PocketUiName = "SwmarlyValheimQOL_CurrencyPocket";
@@ -153,31 +154,37 @@ public sealed class Plugin : BaseUnityPlugin
     {
         if (player == null || player.m_customData == null) return 0;
 
-        int coins = 0;
-        bool migrated = false;
-        foreach (string key in new[] { CoinKey, LegacyCoinKey })
+        bool migrated = player.m_customData.ContainsKey(CoinMigrationKey);
+        if (!migrated)
         {
-            if (!player.m_customData.TryGetValue(key, out string value) || !int.TryParse(value, out int stored)) continue;
-            coins += Math.Max(0, stored);
-            migrated |= key == LegacyCoinKey;
+            int current = player.m_customData.TryGetValue(CoinKey, out string currentValue) && int.TryParse(currentValue, out int parsedCurrent)
+                ? Math.Max(0, parsedCurrent)
+                : 0;
+            int legacy = player.m_customData.TryGetValue(LegacyCoinKey, out string legacyValue) && int.TryParse(legacyValue, out int parsedLegacy)
+                ? Math.Max(0, parsedLegacy)
+                : 0;
+
+            // CurrencyPocket used the legacy key. Prefer an already-created
+            // combined-mod balance when both keys exist: both plugins can see
+            // the same pickup, so adding the two values is exactly how a
+            // duplicated balance is created. If this is a first migration,
+            // the legacy value is used instead.
+            player.m_customData[CoinKey] = (current > 0 ? current : legacy).ToString();
+            player.m_customData[CoinMigrationKey] = "1";
         }
 
-        // CurrencyPocket stores the same balance under CoinPocket_CoinCount.
-        // Migrate it once so leaving the standalone mod installed cannot leave
-        // a second balance behind after this combined mod is enabled.
-        if (migrated)
-        {
-            player.m_customData[CoinKey] = Math.Max(0, coins).ToString();
-            player.m_customData.Remove(LegacyCoinKey);
-        }
-
-        return Math.Max(0, coins);
+        player.m_customData.Remove(LegacyCoinKey);
+        return player.m_customData.TryGetValue(CoinKey, out string value) && int.TryParse(value, out int coins)
+            ? Math.Max(0, coins)
+            : 0;
     }
 
     internal static void SetPocketCoins(Player player, int coins)
     {
         if (player == null || player.m_customData == null) return;
         player.m_customData[CoinKey] = Math.Max(0, coins).ToString();
+        player.m_customData[CoinMigrationKey] = "1";
+        player.m_customData.Remove(LegacyCoinKey);
         UpdatePocketUi();
     }
 
@@ -312,8 +319,29 @@ public sealed class Plugin : BaseUnityPlugin
         rowRect.localRotation = Quaternion.identity;
         rowRect.localScale = Vector3.one;
 
-        PocketExtractButton = FindPocketButton("SwmarlyValheimQOL_ExtractCoins");
-        PocketDepositButton = FindPocketButton("SwmarlyValheimQOL_DepositCoins");
+        // Remove stale buttons left by older 1.0.3 builds and keep only one
+        // instance of each action. A cloned Armor card can survive inventory
+        // transitions, so relying on the static Button references alone leaves
+        // visually overlapping copies behind.
+        PocketExtractButton = null;
+        PocketDepositButton = null;
+        foreach (Button button in PocketUi.GetComponentsInChildren<Button>(true))
+        {
+            if (button.name == "SwmarlyValheimQOL_ExtractCoins" && PocketExtractButton == null)
+            {
+                PocketExtractButton = button;
+            }
+            else if (button.name == "SwmarlyValheimQOL_DepositCoins" && PocketDepositButton == null)
+            {
+                PocketDepositButton = button;
+            }
+            else
+            {
+                // Armor/Weight cards do not contain buttons. Any other button
+                // here is an orphan from a previous pocket layout.
+                Object.Destroy(button.gameObject);
+            }
+        }
         if (PocketExtractButton == null)
         {
             PocketExtractButton = Object.Instantiate(gui.m_takeAllButton, rowTransform);
@@ -355,6 +383,7 @@ public sealed class Plugin : BaseUnityPlugin
             rect.pivot = new Vector2(0.5f, 0.5f);
             rect.sizeDelta = new Vector2(28f, 18f);
             rect.anchoredPosition = position;
+            rect.localPosition = new Vector3(position.x, position.y, 0f);
             rect.localRotation = Quaternion.identity;
             rect.localScale = Vector3.one;
         }
@@ -363,6 +392,7 @@ public sealed class Plugin : BaseUnityPlugin
         if (layout != null) layout.ignoreLayout = true;
         TextMeshProUGUI text = button.GetComponentInChildren<TextMeshProUGUI>(true);
         if (text != null) text.text = label;
+        button.interactable = true;
         button.onClick = new Button.ButtonClickedEvent();
         button.onClick.AddListener(action);
     }
@@ -463,210 +493,57 @@ internal static class FloatingItemsStartPatch
     }
 }
 
-internal static class EquipmentMovementSupport
+[HarmonyPatch(typeof(Player), "CheckRun")]
+internal static class EquipWhileRunningPatch
 {
-    private static readonly FieldInfo RunIntentField = AccessTools.Field(typeof(Character), "m_run");
-    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running");
-    private static readonly string[] HotbarButtons = { "Hotbar1", "Hotbar2", "Hotbar3", "Hotbar4", "Hotbar5", "Hotbar6", "Hotbar7", "Hotbar8" };
-    private static int EquipmentBypassDepth;
-
-    private static bool GetFlag(FieldInfo field, Character character)
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
-        return field != null && field.GetValue(character) is bool value && value;
-    }
+        List<CodeInstruction> code = instructions.ToList();
+        MethodInfo isRunning = AccessTools.Method(typeof(Character), nameof(Character.IsRunning));
+        int removedChecks = 0;
 
-    private static void SetFlag(FieldInfo field, Character character, bool value)
-    {
-        if (field != null) field.SetValue(character, value);
-    }
-
-    internal static bool IsRunning(Player player)
-    {
-        if (player == null) return false;
-        return GetFlag(RunIntentField, player) || GetFlag(RunningField, player) ||
-               (Plugin.IsLocalPlayer(player) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun")));
-    }
-
-    internal sealed class State
-    {
-        internal bool Changed;
-        internal bool OldRun;
-        internal bool OldRunning;
-    }
-
-    internal static State SuspendRunning(Player player)
-    {
-        State state = new()
+        for (int i = 1; i < code.Count; ++i)
         {
-            OldRun = GetFlag(RunIntentField, player),
-            OldRunning = GetFlag(RunningField, player)
-        };
-        state.Changed = state.OldRun || state.OldRunning;
-        if (state.Changed)
-        {
-            // Valheim checks m_run in input/equipment code and m_running in
-            // movement code. Clearing only one is why the previous patch did
-            // not work reliably during a sprint transition.
-            SetFlag(RunIntentField, player, false);
-            SetFlag(RunningField, player, false);
+            if (code[i].opcode != System.Reflection.Emit.OpCodes.Callvirt || code[i].operand is not MethodInfo called ||
+                called.Name != nameof(Character.IsRunning) || (isRunning != null && called.ReturnType != isRunning.ReturnType)) continue;
+
+            // EquipGearWhileRunning uses this same call-site patch. The run
+            // check in CheckRun is the gate that makes Player.UseHotbarItem
+            // flash/select and then immediately refuse the equip transaction.
+            // Removing only the call and its preceding receiver leaves the
+            // rest of Valheim's run calculation intact.
+            code[i - 1].opcode = System.Reflection.Emit.OpCodes.Nop;
+            code[i].opcode = System.Reflection.Emit.OpCodes.Nop;
+            removedChecks++;
         }
-        return state;
+
+        if (removedChecks == 0)
+            Plugin.Instance?.Logger.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected Character.IsRunning call.");
+        return code;
     }
+}
 
-    internal static void RestoreRunning(Player player, State state)
+[HarmonyPatch(typeof(Character), "IsSwimming")]
+internal static class EquipmentInWaterPatch
+{
+    private static bool Prefix(Character __instance, ref bool __result, float ___m_swimTimer)
     {
-        if (player == null || state == null || !state.Changed) return;
-        SetFlag(RunIntentField, player, state.OldRun);
-        SetFlag(RunningField, player, state.OldRunning);
-    }
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return true;
 
-    internal static void EnterBypass()
-    {
-        EquipmentBypassDepth++;
-    }
-
-    internal static void ExitBypass()
-    {
-        EquipmentBypassDepth = Mathf.Max(0, EquipmentBypassDepth - 1);
-    }
-
-    internal static bool ShouldBypassRunningQuery()
-    {
-        if (EquipmentBypassDepth > 0) return true;
-        if (Plugin.IsLocalPlayer(Player.m_localPlayer) && HotbarButtons.Any(ZInput.GetButtonDown)) return true;
-
-        // Valheim performs the running restriction from different call sites
-        // across game builds. Match the same call-site approach used by
-        // UseEquipmentInWater instead of relying on one private field name.
+        // This is the call-site technique used by Use Equipment in Water. It
+        // changes only the IsSwimming result consumed by equip/update code,
+        // leaving movement, stamina, drowning and animation state untouched.
         StackTrace trace = new();
         for (int i = 2; i < trace.FrameCount && i < 12; ++i)
         {
             string method = trace.GetFrame(i).GetMethod()?.Name;
-            if (method is "UseHotbarItem" or "UseItem" or "EquipItem" or "ToggleEquipped" or "UpdateEquipment") return true;
+            if (method is "EquipItem" or "UpdateEquipment")
+            {
+                __result = false;
+                return false;
+            }
         }
-        return false;
-    }
-}
-
-[HarmonyPatch(typeof(Character), "IsRunning")]
-internal static class EquipmentRunningQueryPatch
-{
-    private static bool Prefix(Character __instance, ref bool __result)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !Plugin.IsLocalPlayer(player)) return true;
-        if (!EquipmentMovementSupport.ShouldBypassRunningQuery()) return true;
-        __result = false;
-        return false;
-    }
-}
-
-[HarmonyPatch(typeof(Player), "UseHotbarItem")]
-internal static class EquipWhileRunningHotbarPatch
-{
-    private static bool Prefix(Player __instance, int index)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !EquipmentMovementSupport.IsRunning(__instance)) return true;
-        ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
-        if (item == null) return true;
-
-        EquipmentMovementSupport.EnterBypass();
-        EquipmentMovementSupport.State state = EquipmentMovementSupport.SuspendRunning(__instance);
-        try
-        {
-            // Bypass Player.UseHotbarItem's early running check and enter the
-            // same UseItem path as a normal hotbar activation.
-            __instance.UseItem(__instance.GetInventory(), item, false);
-        }
-        finally
-        {
-            EquipmentMovementSupport.RestoreRunning(__instance, state);
-            EquipmentMovementSupport.ExitBypass();
-        }
-        return false;
-    }
-}
-
-[HarmonyPatch(typeof(Humanoid), "UseItem")]
-internal static class EquipWhileRunningUseItemPatch
-{
-    private static void Prefix(Humanoid __instance, Inventory inventory, ItemDrop.ItemData item, ref EquipmentMovementSupport.State __state)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
-        if (inventory != null && inventory != player.GetInventory()) return;
-        EquipmentMovementSupport.EnterBypass();
-        __state = EquipmentMovementSupport.SuspendRunning(player);
-    }
-
-    private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
-    {
-        if (__state == null) return;
-        if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
-        EquipmentMovementSupport.ExitBypass();
-    }
-}
-
-[HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipWhileRunningEquipItemPatch
-{
-    private static void Prefix(Humanoid __instance, ref EquipmentMovementSupport.State __state)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
-        EquipmentMovementSupport.EnterBypass();
-        __state = EquipmentMovementSupport.SuspendRunning(player);
-    }
-
-    private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
-    {
-        if (__state == null) return;
-        if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
-        EquipmentMovementSupport.ExitBypass();
-    }
-}
-
-[HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipmentInWaterEquipPatch
-{
-    private sealed class State
-    {
-        internal bool Changed;
-        internal float OldSwimTimer;
-    }
-
-    private static void Prefix(Humanoid __instance, ref float ___m_swimTimer, ref State __state)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return;
-        __state = new State { Changed = true, OldSwimTimer = ___m_swimTimer };
-        // Humanoid.EquipItem rejects swimming players through IsSwimming().
-        // Temporarily present a non-swimming state for the equip transaction,
-        // then restore the real swimming timer immediately afterward.
-        ___m_swimTimer = 1f;
-    }
-
-    private static void Postfix(ref float ___m_swimTimer, State __state)
-    {
-        if (__state != null && __state.Changed) ___m_swimTimer = __state.OldSwimTimer;
-    }
-}
-
-[HarmonyPatch(typeof(Humanoid), "UpdateEquipment")]
-internal static class EquipmentInWaterUpdatePatch
-{
-    private sealed class State
-    {
-        internal bool Changed;
-        internal float OldSwimTimer;
-    }
-
-    private static void Prefix(Humanoid __instance, ref float ___m_swimTimer, ref State __state)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return;
-        __state = new State { Changed = true, OldSwimTimer = ___m_swimTimer };
-        ___m_swimTimer = 1f;
-    }
-
-    private static void Postfix(ref float ___m_swimTimer, State __state)
-    {
-        if (__state != null && __state.Changed) ___m_swimTimer = __state.OldSwimTimer;
+        return true;
     }
 }
 
@@ -734,7 +611,6 @@ internal static class FleeOnSightPatch
 internal static class PlayerQolUpdatePatch
 {
     private static readonly Dictionary<int, float> BaseCrouchSpeed = new();
-    private static readonly Dictionary<int, float> BaseSwimSpeed = new();
 
     private static void Prefix(Player __instance)
     {
@@ -745,14 +621,6 @@ internal static class PlayerQolUpdatePatch
             float factor = __instance.m_skills == null ? 0f : __instance.m_skills.GetSkillFactor(Skills.SkillType.Sneak);
             __instance.m_crouchSpeed = BaseCrouchSpeed[id] * Mathf.Lerp(1f, Plugin.SneakSpeedMultiplier.Value, factor);
         }
-        if (Plugin.IsFeatureEnabled(Plugin.SwimImprovements))
-        {
-            if (!BaseSwimSpeed.ContainsKey(id)) BaseSwimSpeed[id] = __instance.m_swimSpeed;
-            float factor = __instance.m_skills == null ? 0f : __instance.m_skills.GetSkillFactor(Skills.SkillType.Swim);
-            float speed = BaseSwimSpeed[id] * Mathf.Lerp(1f, Plugin.MaxSwimSpeedMultiplier.Value, factor);
-            if (Plugin.SwimSprint.Value && Plugin.IsLocalPlayer(__instance) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
-            __instance.m_swimSpeed = speed;
-        }
     }
 
     private static void Postfix(Player __instance)
@@ -760,6 +628,24 @@ internal static class PlayerQolUpdatePatch
         if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
             __instance.UseStamina(-Plugin.SwimIdleStaminaPerSecond.Value * Time.deltaTime);
 
+    }
+}
+
+[HarmonyPatch(typeof(Character), "UpdateSwimming")]
+internal static class SwimImprovementsPatch
+{
+    private static readonly Dictionary<int, float> BaseSwimSpeed = new();
+
+    private static void Prefix(Character __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.SwimImprovements) || __instance is not Player player) return;
+
+        int id = player.GetInstanceID();
+        if (!BaseSwimSpeed.ContainsKey(id)) BaseSwimSpeed[id] = player.m_swimSpeed;
+        float factor = player.m_skills == null ? 0f : player.m_skills.GetSkillFactor(Skills.SkillType.Swim);
+        float speed = BaseSwimSpeed[id] * Mathf.Lerp(1f, Plugin.MaxSwimSpeedMultiplier.Value, factor);
+        if (Plugin.SwimSprint.Value && Plugin.IsLocalPlayer(player) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
+        player.m_swimSpeed = speed;
     }
 }
 
@@ -803,37 +689,61 @@ internal static class DivingPatch
         return Plugin.SurfaceKey.Value.IsPressed() || ZInput.GetButton("Jump") || ZInput.GetButton("JoyJump");
     }
 
-    private static bool IsControllableSwimmer(Character character)
+    internal static bool IsLocalWaterPlayer(Character character)
     {
         return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
-               Plugin.IsLocalPlayer(player) && player.InWater() && !player.IsOnGround() && player.IsSwimming();
+               Plugin.IsLocalPlayer(player) && player.InWater() && !player.IsOnGround() && !player.IsDead();
     }
 
-    private static void Prefix(Character __instance, float dt)
+    internal static bool HasDiveTarget(Player player)
     {
-        if (!IsControllableSwimmer(__instance))
-        {
-            if (__instance is Player player && (!player.InWater() || player.IsOnGround())) player.m_swimDepth = 1.6f;
-            return;
-        }
+        return player != null && player.m_swimDepth > 1.61f;
+    }
 
+    internal static bool ShouldKeepNativeSwimming(Player player)
+    {
+        return IsLocalWaterPlayer(player) && (HasDiveTarget(player) || IsDivePressed() || IsSurfacePressed());
+    }
+
+    private static void UpdateDepthTarget(Player player, float dt)
+    {
         bool diving = IsDivePressed();
         bool surfacing = IsSurfacePressed();
         if (diving == surfacing) return;
 
-        // Valheim's native swimming controller uses m_swimDepth as its
-        // vertical target. Changing only Rigidbody.velocity gets overwritten
-        // by UpdateSwimming on the next physics step, which is why the old
-        // implementation appeared to do nothing. Drive the native target
-        // first, using the same mechanism as BetterDiving.
+        // BetterDiving and Valheim's own swimming controller use m_swimDepth
+        // as the authoritative vertical target. Velocity alone is overwritten
+        // by UpdateSwimming on the next physics step.
         float direction = diving ? 1f : -1f;
         float rate = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
-        __instance.m_swimDepth = Mathf.Clamp(__instance.m_swimDepth + direction * rate * Mathf.Max(dt, Time.fixedDeltaTime), 1.6f, 20f);
+        player.m_swimDepth = Mathf.Clamp(player.m_swimDepth + direction * rate * Mathf.Max(dt, Time.fixedDeltaTime), 1.6f, 20f);
+    }
+
+    private static void Prefix(Character __instance, float dt, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    {
+        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
+        if (!player.InWater() || player.IsOnGround() || player.IsDead())
+        {
+            player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        UpdateDepthTarget(player, dt);
+
+        // These are the two native timers that otherwise make Valheim leave
+        // the swimming state during a deep dive, causing an immediate bounce
+        // back to the surface. Keep native swimming alive for the whole depth
+        // target, including frames where the dive key is released.
+        if (ShouldKeepNativeSwimming(player))
+        {
+            ___m_lastGroundTouch = 0.3f;
+            ___m_swimTimer = 0f;
+        }
     }
 
     private static void Postfix(Character __instance, float dt)
     {
-        if (!IsControllableSwimmer(__instance)) return;
+        if (__instance is not Player player || !ShouldKeepNativeSwimming(player)) return;
 
         bool diving = IsDivePressed();
         bool surfacing = IsSurfacePressed();
@@ -843,13 +753,69 @@ internal static class DivingPatch
         if (body == null) return;
 
         float direction = diving ? -1f : 1f;
-        float speed = Plugin.DiveSpeed.Value;
+        float speed = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
         float fixedDelta = Mathf.Max(Mathf.Max(dt, Time.fixedDeltaTime), 0.001f);
         Vector3 velocity = body.velocity;
         velocity.y = Mathf.MoveTowards(velocity.y, direction * speed, speed * 8f * fixedDelta);
         body.velocity = velocity;
-        if (Plugin.DiveStaminaPerSecond.Value > 0f && __instance is Player player)
+        if (Plugin.DiveStaminaPerSecond.Value > 0f)
             player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
+    }
+}
+
+[HarmonyPatch(typeof(Character), "UpdateMotion")]
+internal static class DivingMotionPatch
+{
+    private static void Prefix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    {
+        if (__instance is not Player player) return;
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
+        if (!player.InWater() || player.IsOnGround() || player.IsDead())
+        {
+            player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        // UpdateMotion is where Valheim decides whether the player is still a
+        // swimmer. Repeat the native BetterDiving state correction here so the
+        // camera and movement code cannot reset the player between physics
+        // ticks while the depth target is below the surface.
+        if (DivingPatch.ShouldKeepNativeSwimming(player))
+        {
+            ___m_lastGroundTouch = 0.3f;
+            ___m_swimTimer = 0f;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
+internal static class DivingCameraPatch
+{
+    private static readonly Dictionary<int, float> OriginalWaterDistance = new();
+
+    private static void Prefix(GameCamera __instance, Camera ___m_camera)
+    {
+        Player player = Player.m_localPlayer;
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || player == null || ___m_camera == null) return;
+
+        int id = __instance.GetInstanceID();
+        if (!OriginalWaterDistance.ContainsKey(id)) OriginalWaterDistance[id] = __instance.m_minWaterDistance;
+
+        bool targetUnderwater = DivingPatch.IsLocalWaterPlayer(player) && DivingPatch.HasDiveTarget(player);
+        bool cameraUnderwater = false;
+        if (DivingPatch.IsLocalWaterPlayer(player))
+        {
+            float surface = player.GetLiquidLevel();
+            cameraUnderwater = ___m_camera.transform.position.y < surface && player.IsSwimming();
+        }
+
+        // GameCamera's normal minimum-water-distance clamp keeps the camera
+        // above the surface even when the player has a deep swim target. The
+        // reference diving implementation removes that clamp while below
+        // water and restores the original value after surfacing.
+        __instance.m_minWaterDistance = targetUnderwater || cameraUnderwater
+            ? -5000f
+            : OriginalWaterDistance[id];
     }
 }
 
