@@ -10,6 +10,7 @@ namespace SwmarlyValheimQOL {
     public static class PickupPatch {
         [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.Pickup)), HarmonyPrefix]
         public static bool HaveEmptySlotPrefix(Humanoid __instance, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
             if (InventoryBlock.Get(__instance.GetInventory()).IsAnySlotBlocked()) {
 #if DEBUG
                 Log.LogDebug($"Pickup blocked because of blocked slot:");
@@ -25,4 +26,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
