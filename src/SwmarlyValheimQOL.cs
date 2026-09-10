@@ -321,18 +321,22 @@ public sealed class Plugin : BaseUnityPlugin
     internal static void CreatePocketUi(InventoryGui gui)
     {
         if (!IsFeatureEnabled(CurrencyPocket) || gui == null) return;
-        Transform inventoryRoot = gui.m_player != null
-            ? gui.m_player.transform
-            : gui.m_playerGrid != null && gui.m_playerGrid.transform.parent != null
-                ? gui.m_playerGrid.transform.parent
-                : null;
+        // CurrencyPocket's working implementation uses InventoryGui.m_player
+        // as the coordinate space. Expanded-inventory mods can move Armor and
+        // Weight into child panels, so use the player panel when available and
+        // only fall back to the GUI object on layouts that do not expose it.
+        Transform inventoryRoot = GetPocketLayoutRoot(gui);
         if (inventoryRoot == null) return;
-        // Expanded-inventory and UI-layout mods reparent these controls. The
-        // old direct Find("Armor") lookup therefore made the pocket silently
-        // disappear after another mod rebuilt the inventory hierarchy.
         Transform armor = FindDescendant(inventoryRoot, "Armor");
         Transform weight = FindDescendant(inventoryRoot, "Weight");
-        if (armor == null) return;
+        if (armor == null) armor = FindDescendant(gui.transform, "Armor");
+        if (weight == null) weight = FindDescendant(gui.transform, "Weight");
+        if (armor == null && weight == null)
+        {
+            LogPocketUiWarning(gui, "Armor/Weight anchors were not present after InventoryGui.Show; the pocket will retry on the next UI rebuild.");
+            return;
+        }
+        Transform source = armor ?? weight;
 
         // A GUI can survive a world/player transition and old versions of the
         // combined mod could also leave two cloned panels behind. Adopt one
@@ -364,9 +368,17 @@ public sealed class Plugin : BaseUnityPlugin
             PocketUi = existing;
         if (PocketUi == null)
         {
-            PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
+            PocketUi = Object.Instantiate(source.gameObject, inventoryRoot);
             PocketUi.name = PocketUiName;
         }
+        else if (PocketUi.transform.parent != inventoryRoot)
+        {
+            // Reparent the surviving clone to the same panel used by the
+            // stock inventory. Keeping it under an Armor sub-panel was the
+            // source of the previous center-screen/off-screen placements.
+            PocketUi.transform.SetParent(inventoryRoot, false);
+        }
+        PocketUi.SetActive(true);
 
         CurrencyPocketDropTarget[] targets = PocketUi.GetComponents<CurrencyPocketDropTarget>();
         if (targets.Length == 0) PocketUi.AddComponent<CurrencyPocketDropTarget>();
@@ -385,12 +397,46 @@ public sealed class Plugin : BaseUnityPlugin
         SetPocketIcon();
     }
 
+    internal static Transform GetPocketLayoutRoot(InventoryGui gui)
+    {
+        if (gui == null) return null;
+        if (gui.m_player != null) return gui.m_player.transform;
+        if (gui.m_playerGrid != null)
+            return gui.m_playerGrid.transform.parent ?? gui.m_playerGrid.transform;
+        return gui.transform;
+    }
+
     private static Transform FindDescendant(Transform root, string name)
     {
         if (root == null) return null;
         foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
-            if (child != root && child.name == name) return child;
+        {
+            if (child == root) continue;
+            string childName = NormalizeUiName(child.name);
+            if (childName.Equals(name, StringComparison.OrdinalIgnoreCase)) return child;
+        }
+        // Some inventory-layout mods clone these anchors and append a suffix.
+        // Accept that suffix only after the exact-name pass, so a similarly
+        // named unrelated control cannot win over the stock anchor.
+        foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (child == root) continue;
+            if (NormalizeUiName(child.name).StartsWith(name, StringComparison.OrdinalIgnoreCase)) return child;
+        }
         return null;
+    }
+
+    private static string NormalizeUiName(string name)
+    {
+        return (name ?? string.Empty).Replace("(Clone)", string.Empty).Trim();
+    }
+
+    private static readonly HashSet<int> PocketUiWarnings = new();
+
+    private static void LogPocketUiWarning(InventoryGui gui, string message)
+    {
+        if (gui == null || !PocketUiWarnings.Add(gui.GetInstanceID())) return;
+        LogWarning($"Currency pocket UI: {message}");
     }
 
     private static void EnsurePocketButtons(InventoryGui gui)
@@ -511,15 +557,11 @@ public sealed class Plugin : BaseUnityPlugin
             yield return null;
             yield return new WaitForEndOfFrame();
             if (gui == null) continue;
-            Transform root = gui.m_player != null
-                ? gui.m_player.transform
-                : gui.m_playerGrid != null && gui.m_playerGrid.transform.parent != null
-                    ? gui.m_playerGrid.transform.parent
-                    : null;
+            Transform root = GetPocketLayoutRoot(gui);
             if (root == null) continue;
             Transform armor = FindDescendant(root, "Armor");
             Transform weight = FindDescendant(root, "Weight");
-            if (armor != null)
+            if (armor != null || weight != null)
             {
                 RepositionPocketUi(root, armor, weight);
                 SetPocketIcon();
@@ -532,46 +574,34 @@ public sealed class Plugin : BaseUnityPlugin
     private static void RepositionPocketUi(Transform inventoryRoot, Transform armor, Transform weight)
     {
         RectTransform pocketRect = PocketUi == null ? null : PocketUi.GetComponent<RectTransform>();
-        RectTransform armorRect = armor == null ? null : armor.GetComponent<RectTransform>();
-        if (pocketRect == null || armorRect == null) return;
+        RectTransform anchorRect = (armor ?? weight)?.GetComponent<RectTransform>();
+        if (pocketRect == null || anchorRect == null) return;
+        RectTransform armorRect = armor == null ? anchorRect : armor.GetComponent<RectTransform>();
 
         RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
 
-        // Armor and Weight are siblings in Valheim's inventory canvas. Use
-        // their anchored coordinates directly, matching CurrencyPocket. The
-        // previous world-space conversion applied the parent's anchor offset
-        // a second time and moved the pocket into the middle of the screen.
-        // The stock inventory keeps Armor and Weight directly under the
-        // player's inventory root. Use that same parent and the same
-        // anchored coordinate space. Reparenting through a screen-space
-        // canvas (the old workaround) is what put the card in the middle of
-        // the screen with expanded-inventory layouts.
-        Transform layoutParent = armorRect.parent == inventoryRoot ? inventoryRoot : armorRect.parent;
-        if (layoutParent != null && pocketRect.parent != layoutParent)
-            pocketRect.SetParent(layoutParent, false);
+        // Keep the clone in InventoryGui.m_player's coordinate space, exactly
+        // like CurrencyPocket. Armor and Weight may be nested by an inventory
+        // layout mod, so compute their midpoint in world space and convert it
+        // once into the chosen root. This avoids applying a nested parent's
+        // anchor offset a second time (the old reason for center-screen UI).
+        if (pocketRect.parent != inventoryRoot)
+            pocketRect.SetParent(inventoryRoot, false);
+        pocketRect.anchorMin = new Vector2(0.5f, 0.5f);
+        pocketRect.anchorMax = new Vector2(0.5f, 0.5f);
+        pocketRect.pivot = new Vector2(0.5f, 0.5f);
 
-        pocketRect.anchorMin = armorRect.anchorMin;
-        pocketRect.anchorMax = armorRect.anchorMax;
-        pocketRect.pivot = armorRect.pivot;
-
-        if (weightRect != null && weightRect.parent == armorRect.parent)
-        {
-            pocketRect.anchoredPosition = new Vector2(
-                armorRect.anchoredPosition.x,
-                (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
-        }
+        Vector3 targetWorld;
+        if (armorRect != null && weightRect != null)
+            targetWorld = (armorRect.position + weightRect.position) * 0.5f;
         else
-        {
-            // Fallback for inventory-layout mods that reparent Weight. Keep
-            // the pocket beside Armor without another world/anchored conversion.
-            pocketRect.anchoredPosition = new Vector2(
-                armorRect.anchoredPosition.x,
-                armorRect.anchoredPosition.y - armorRect.rect.height - 8f);
-        }
+            targetWorld = anchorRect.position + new Vector3(0f, -anchorRect.rect.height - 8f, 0f);
+        Vector3 targetLocal = inventoryRoot.InverseTransformPoint(targetWorld);
+        pocketRect.localPosition = new Vector3(targetLocal.x, targetLocal.y, pocketRect.localPosition.z);
 
-        // Keep the card directly after Armor, before Weight and extension UI.
+        // Keep it on top of layout siblings so another card cannot cover it.
         if (pocketRect.parent != null)
-            pocketRect.SetSiblingIndex(Mathf.Clamp(armor.GetSiblingIndex() + 1, 0, pocketRect.parent.childCount - 1));
+            pocketRect.SetAsLastSibling();
     }
 
     private static void SetPocketIcon()
@@ -698,6 +728,7 @@ internal static class AutoReplantState
 {
     private const string ReplantScheduledKey = "SwmarlyValheimQOL_ReplantScheduled";
     private static readonly HashSet<int> PendingInstances = new();
+    private static readonly HashSet<string> WarnedNames = new(StringComparer.OrdinalIgnoreCase);
 
     internal static void OnStumpDestroyed(Destructible destructible)
     {
@@ -705,15 +736,32 @@ internal static class AutoReplantState
             ZNet.instance == null || ZNetScene.instance == null)
             return;
 
-        if (!TryGetSaplingPrefab(destructible.name, out string saplingName)) return;
-        GameObject sapling = ZNetScene.instance.GetPrefab(saplingName);
-        if (sapling == null)
+        // Unity appends "(Clone)" to the live object name. Utils.GetPrefabName
+        // is Valheim's own network-prefab normalization and is the reliable
+        // value for tree stumps created by ZNetScene, so try both it and the
+        // component name for compatibility with tree mods.
+        string objectName = NormalizeName(destructible.name);
+        string prefabName = NormalizeName(Utils.GetPrefabName(destructible.gameObject));
+        if (!TryGetSaplingPrefab(new[] { prefabName, objectName }, out string saplingName))
         {
-            Plugin.LogWarning($"Automatic tree replanting could not find sapling prefab '{saplingName}' for stump '{destructible.name}'.");
+            if (WarnedNames.Add(prefabName) && !string.IsNullOrEmpty(prefabName))
+                Plugin.LogWarning($"Automatic tree replanting saw stump '{prefabName}' but no mapping matched it. Add '{prefabName}=<sapling prefab>' to the config if it is a compatible tree.");
             return;
         }
 
+        // The tree ZDO has one owner. Only that owner schedules the replacement
+        // so a dedicated server plus several clients cannot plant duplicates.
         ZNetView nview = destructible.GetComponent<ZNetView>() ?? destructible.GetComponentInParent<ZNetView>();
+        if (nview != null && nview.IsValid() && !nview.IsOwner()) return;
+
+        GameObject sapling = ZNetScene.instance.GetPrefab(saplingName);
+        if (sapling == null)
+        {
+            if (WarnedNames.Add(saplingName))
+                Plugin.LogWarning($"Automatic tree replanting could not find sapling prefab '{saplingName}' for stump '{prefabName}'. Check the spelling in the mapping config.");
+            return;
+        }
+
         ZDO zdo = nview?.GetZDO();
         if (zdo != null)
         {
@@ -727,9 +775,13 @@ internal static class AutoReplantState
         Plugin.Instance.StartCoroutine(SpawnSaplingAfterDelay(saplingName, position, rotation, destructible.GetInstanceID()));
     }
 
-    private static bool TryGetSaplingPrefab(string stumpName, out string saplingName)
+    private static bool TryGetSaplingPrefab(IEnumerable<string> stumpNames, out string saplingName)
     {
-        string normalizedStump = NormalizeName(stumpName);
+        string[] normalizedStumps = stumpNames
+            .Select(NormalizeName)
+            .Where(name => !string.IsNullOrEmpty(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         saplingName = null;
         string mappings = Plugin.TreeReplantMappings?.Value ?? string.Empty;
         foreach (string entry in mappings.Split(','))
@@ -739,8 +791,9 @@ internal static class AutoReplantState
             string stump = NormalizeName(pair[0]);
             string sapling = NormalizeName(pair[1]);
             if (stump.Length == 0 || sapling.Length == 0) continue;
-            if (normalizedStump.Equals(stump, StringComparison.OrdinalIgnoreCase) ||
-                normalizedStump.StartsWith(stump, StringComparison.OrdinalIgnoreCase))
+            if (normalizedStumps.Any(normalizedStump =>
+                    normalizedStump.Equals(stump, StringComparison.OrdinalIgnoreCase) ||
+                    normalizedStump.StartsWith(stump, StringComparison.OrdinalIgnoreCase)))
             {
                 saplingName = sapling;
                 return true;
@@ -759,11 +812,10 @@ internal static class AutoReplantState
         GameObject prefab = ZNetScene.instance.GetPrefab(prefabName);
         if (prefab == null) yield break;
 
-        // SpawnObject is Valheim's routed spawn path. It is valid to invoke it
-        // from a client: the request is handled by the server and the sapling
-        // is then replicated to every peer. Restricting this callback to
-        // IsServer() made the feature fail whenever only the client observed
-        // the stump's Destructible.Destroy callback.
+        // SpawnObject is Valheim's routed spawn path. It is invoked by the
+        // stump owner (the dedicated server in a dedicated-server world, or
+        // the host in a listen-server world), and the resulting ZDO is then
+        // replicated to every client.
         ZNetScene.instance.SpawnObject(position, rotation, prefab);
     }
 
@@ -843,70 +895,6 @@ internal static class EquipWhileRunningPatch
         if (removedQueueClears == 0)
             Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected ClearActionQueue call.");
         return code;
-    }
-}
-
-// CheckRun's queue clear is only one cancellation path. Player.UseItem and
-// Humanoid.EquipItem also reject an action while the run state is set. The
-// reference mod's transpiler predates the Valheim 1.0 action gate, so keep the
-// real run flag false only for the native equip/use call and restore it
-// immediately afterwards. This preserves sprinting and network movement while
-// allowing the hotbar action to complete.
-[HarmonyPatch(typeof(Player), "UseItem")]
-internal static class EquipWhileRunningUseItemPatch
-{
-    private static readonly FieldInfo RunField = AccessTools.Field(typeof(Character), "m_run") ??
-                                                  AccessTools.Field(typeof(Player), "m_run");
-
-    private static void Prefix(Player __instance, ref bool __state)
-    {
-        __state = false;
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !Plugin.IsLocalPlayer(__instance) || RunField == null) return;
-        __state = (bool)RunField.GetValue(__instance);
-        RunField.SetValue(__instance, false);
-    }
-
-    private static void Postfix(Player __instance, bool __state)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance) && RunField != null)
-            RunField.SetValue(__instance, __state);
-    }
-}
-
-[HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipWhileRunningEquipItemPatch
-{
-    private static readonly FieldInfo RunField = AccessTools.Field(typeof(Character), "m_run") ??
-                                                  AccessTools.Field(typeof(Player), "m_run");
-
-    private static void Prefix(Humanoid __instance, ref bool __state)
-    {
-        __state = false;
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player ||
-            !Plugin.IsLocalPlayer(player) || RunField == null) return;
-        __state = (bool)RunField.GetValue(player);
-        RunField.SetValue(player, false);
-    }
-
-    private static void Postfix(Humanoid __instance, bool __state)
-    {
-        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && __instance is Player player &&
-            Plugin.IsLocalPlayer(player) && RunField != null)
-            RunField.SetValue(player, __state);
-    }
-}
-
-// Keep a runtime fallback alongside the reference transpiler above. Some
-// Valheim 1.0 builds emit CheckRun's call as a base-class call that Harmony's
-// IL matcher can see only after another transpiler has run. In that case the
-// original EquipGearWhileRunning transpiler is never enough; this prefix is
-// on the actual queue-clearing method and prevents the same cancellation.
-[HarmonyPatch(typeof(Humanoid), "ClearActionQueue")]
-internal static class EquipWhileRunningClearQueuePatch
-{
-    private static bool Prefix(Humanoid __instance)
-    {
-        return !Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player;
     }
 }
 
@@ -1457,13 +1445,17 @@ internal static class DivingPatch
     internal static bool IsLocalWaterPlayer(Character character)
     {
         return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
-               Plugin.IsLocalPlayer(player) && IsInLiquid(player) && !player.IsOnGround() && !player.IsDead();
+               Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
+               (IsInLiquid(player) || DiveToggle || HasDiveTarget(player));
     }
 
     internal static bool IsInLiquid(Player player)
     {
         if (player == null) return false;
-        if (player.InWater()) return true;
+        // IsSwimming remains true during the native transition into a dive;
+        // relying only on InWater() makes the input/camera patches drop out
+        // for a frame and restores the vanilla surface target.
+        if (player.InWater() || player.IsSwimming()) return true;
         return Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.15f;
     }
 
@@ -1494,11 +1486,22 @@ internal static class DivingPatch
         // The cached liquid-depth value can briefly report false during the
         // transition below the surface; resetting m_swimDepth there restores
         // the vanilla 1.6 target and launches the player back up.
-        if (player.IsOnGround() || player.IsDead() ||
-            (!IsInLiquid(player) && !IsActuallyUnderwater(player)))
+        if (player.IsOnGround() || player.IsDead())
         {
             DiveToggle = false;
             player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        // Keep a dive alive through the short transition where the vanilla
+        // water-volume query is false. Only reset once the player is neither
+        // swimming nor submerged; this is the distinction BetterDiving uses
+        // to prevent the upward bounce a few seconds after diving.
+        if (!IsInLiquid(player) && !player.IsSwimming() && !IsActuallyUnderwater(player))
+        {
+            DiveToggle = false;
+            player.m_swimDepth = 1.6f;
+            LastRequestedDepth = 1.6f;
             return;
         }
 
@@ -1550,7 +1553,7 @@ internal static class DivingPatch
     private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player) ||
-            player.IsOnGround() || player.IsDead() || !IsInLiquid(player)) return;
+            player.IsOnGround() || player.IsDead() || (!IsInLiquid(player) && !player.IsSwimming() && !HasDiveTarget(player))) return;
 
         bool controllingDepth = DiveToggle || IsDiveHeld() || IsSurfaceHeld();
         if (!controllingDepth) return;
@@ -1577,7 +1580,7 @@ internal static class DivingInputPatch
     private static void Prefix(Player __instance)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
-            !DivingPatch.IsInLiquid(__instance) || __instance.IsOnGround() || __instance.IsDead()) return;
+            (!DivingPatch.IsInLiquid(__instance) && !__instance.IsSwimming()) || __instance.IsOnGround() || __instance.IsDead()) return;
 
         if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
         {
@@ -1620,12 +1623,33 @@ internal static class DivingMotionPatch
         // otherwise Valheim applies its upward surface impulse after a few
         // seconds, which is the recurring bounce reported on dedicated
         // servers.
-        bool controlledDive = player.m_swimDepth > 2.5f && DivingPatch.IsInLiquid(player);
+        bool controlledDive = player.m_swimDepth > 2.5f &&
+                              (DivingPatch.IsInLiquid(player) || player.IsSwimming());
         if (DivingPatch.IsActuallyUnderwater(player) || controlledDive)
         {
             ___m_lastGroundTouch = 0.3f;
             ___m_swimTimer = 0f;
         }
+    }
+}
+
+// UpdateSwimming runs after the fixed-motion state on some Valheim 1.0
+// builds. Reasserting the native timers here prevents that later method from
+// expiring the swim timer and applying the surface impulse while the target
+// depth is already underwater.
+[HarmonyPatch(typeof(Character), "UpdateSwimming")]
+internal static class DivingSwimmingTimerPatch
+{
+    private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    {
+        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) ||
+            !Plugin.IsLocalPlayer(player) || player.IsOnGround() || player.IsDead()) return;
+        if (!DivingPatch.HasDiveTarget(player) ||
+            (!DivingPatch.IsInLiquid(player) && !player.IsSwimming())) return;
+
+        ___m_lastGroundTouch = 0.3f;
+        ___m_swimTimer = 0f;
+        player.m_swimDepth = Mathf.Clamp(player.m_swimDepth, 2.5f, 20f);
     }
 }
 
@@ -1804,9 +1828,11 @@ internal static class CurrencyUiRecoveryPatch
 {
     private static void Postfix(InventoryGui __instance)
     {
+        Transform root = Plugin.GetPocketLayoutRoot(__instance);
         if (Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) &&
             (Plugin.PocketUi == null || !Plugin.PocketUi ||
-             (__instance.m_player != null && !Plugin.PocketUi.transform.IsChildOf(__instance.m_player.transform))))
+             (root != null && !Plugin.PocketUi.transform.IsChildOf(root)) ||
+             (Plugin.PocketUi != null && Plugin.PocketUi.activeInHierarchy == false)))
             Plugin.CreatePocketUi(__instance);
     }
 }
