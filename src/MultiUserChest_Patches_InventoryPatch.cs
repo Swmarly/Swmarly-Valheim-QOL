@@ -15,6 +15,7 @@ namespace SwmarlyValheimQOL {
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int))]
         [HarmonyPrefix, HarmonyPriority(Priority.VeryLow)]
         public static void AddItem1Prefix(Inventory __instance, ref bool __runOriginal, ItemDrop.ItemData item, int amount, int x, int y, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!__runOriginal) {
                 return;
             }
@@ -31,6 +32,7 @@ namespace SwmarlyValheimQOL {
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), typeof(ItemDrop.ItemData))]
         [HarmonyPrefix, HarmonyPriority(Priority.VeryLow)]
         public static void AddItem2Prefix(Inventory __instance, ref bool __runOriginal, ItemDrop.ItemData item, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!__runOriginal) {
                 return;
             }
@@ -47,6 +49,7 @@ namespace SwmarlyValheimQOL {
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.RemoveItem), typeof(ItemDrop.ItemData))]
         [HarmonyPrefix, HarmonyPriority(Priority.VeryLow)]
         public static void RemoveItemPrefix(Inventory __instance, ref bool __runOriginal, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!__runOriginal) {
                 return;
             }
@@ -67,6 +70,7 @@ namespace SwmarlyValheimQOL {
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.RemoveItem), typeof(ItemDrop.ItemData))]
         [HarmonyPostfix]
         public static void RemoveItemPostfix(Inventory __instance, ItemDrop.ItemData item, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (__result) {
                 LastRemovedItem.SetTarget(item);
             } else {
@@ -76,16 +80,19 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.MoveAll)), HarmonyPrefix, HarmonyPriority(Priority.First)]
         public static void MoveAllPrefix() {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             allowItemSwap = false;
         }
 
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.MoveAll)), HarmonyPostfix, HarmonyPriority(Priority.Last)]
         public static void MoveAllPostfix() {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             allowItemSwap = true;
         }
 
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.Changed)), HarmonyPostfix]
         public static void AddItemPostfix(Inventory __instance) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             foreach (Inventory inventory in __instance.GetInventories()) {
                 AssignItemsOfInventory(inventory);
             }
@@ -99,6 +106,7 @@ namespace SwmarlyValheimQOL {
         [HarmonyWrapSafe]
         [HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> RemoveLogging(IEnumerable<CodeInstruction> instructions) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return instructions;
             return new CodeMatcher(instructions)
                 .MatchForward(false, new CodeMatch(i => i.Calls(AccessTools.Method(typeof(ZLog), nameof(ZLog.Log)))))
                 .SetInstruction(new CodeInstruction(OpCodes.Pop))
@@ -174,4 +182,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
