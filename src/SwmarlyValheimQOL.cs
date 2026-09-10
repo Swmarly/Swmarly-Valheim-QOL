@@ -1111,85 +1111,6 @@ internal static class SitRegenerationFixedPatch
         // fixedDeltaTime. In multiplayer, duplicate/replayed FixedUpdate
         // callbacks and simulation catch-up can otherwise add the same time
         // more than once and make sitting regeneration much faster near other
-         FleeOnSightPatch
-{
-    private static void Postfix(MonsterAI __instance)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.FleeOnSight)) return;
-        string name = __instance.name.ToLowerInvariant();
-        foreach (string configured in Plugin.FleeMobNames.Value.Split(','))
-        {
-            if (!string.IsNullOrWhiteSpace(configured) && name.Contains(configured.Trim().ToLowerInvariant()))
-            {
-                __instance.m_fleeIfNotAlerted = true;
-                return;
-            }
-        }
-    }
-}
-
-[HarmonyPatch(typeof(Player), "Update")]
-internal static class PlayerQolUpdatePatch
-{
-    private static readonly Dictionary<int, float> BaseCrouchSpeed = new();
-
-    private static void Prefix(Player __instance)
-    {
-        int id = __instance.GetInstanceID();
-        if (Plugin.IsFeatureEnabled(Plugin.SneakSpeed))
-        {
-            if (!BaseCrouchSpeed.ContainsKey(id)) BaseCrouchSpeed[id] = __instance.m_crouchSpeed;
-            float factor = __instance.m_skills == null ? 0f : __instance.m_skills.GetSkillFactor(Skills.SkillType.Sneak);
-            __instance.m_crouchSpeed = BaseCrouchSpeed[id] * Mathf.Lerp(1f, Plugin.SneakSpeedMultiplier.Value, factor);
-        }
-    }
-
-    private static void Postfix(Player __instance)
-    {
-        if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
-            __instance.UseStamina(-Plugin.SwimIdleStaminaPerSecond.Value * Time.deltaTime);
-
-    }
-}
-
-[HarmonyPatch(typeof(Character), "UpdateSwimming")]
-internal static class SwimImprovementsPatch
-{
-    private static readonly Dictionary<int, float> BaseSwimSpeed = new();
-
-    private static void Prefix(Character __instance)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.SwimImprovements) || __instance is not Player player) return;
-
-        int id = player.GetInstanceID();
-        if (!BaseSwimSpeed.ContainsKey(id)) BaseSwimSpeed[id] = player.m_swimSpeed;
-        float factor = player.m_skills == null ? 0f : player.m_skills.GetSkillFactor(Skills.SkillType.Swim);
-        float speed = BaseSwimSpeed[id] * Mathf.Lerp(1f, Plugin.MaxSwimSpeedMultiplier.Value, factor);
-        if (Plugin.SwimSprint.Value && Plugin.IsLocalPlayer(player) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
-        player.m_swimSpeed = speed;
-    }
-}
-
-[HarmonyPatch(typeof(Player), "FixedUpdate")]
-internal static class SitRegenerationFixedPatch
-{
-    private static readonly Dictionary<int, float> NextHealAt = new();
-    private const float HealIntervalSeconds = 1f;
-
-    private static void Postfix(Player __instance)
-    {
-        int id = __instance.GetInstanceID();
-        if (!Plugin.IsLocalPlayer(__instance) || !Plugin.IsFeatureEnabled(Plugin.SitRegeneration) ||
-            !__instance.IsSitting() || __instance.GetHealth() >= __instance.GetMaxHealth())
-        {
-            NextHealAt.Remove(id);
-            return;
-        }
-
-        // Use an absolute realtime deadline instead of accumulating
-        // fixedDeltaTime. In multiplayer, duplicate/replayed FixedUpdate
-        // callbacks and simulation catch-up can otherwise add the same time
-        // more than once and make sitting regeneration much faster near other
         // networked players. Never catch up multiple ticks: one Heal call is
         // allowed per real-time second for this player.
         float now = Time.realtimeSinceStartup;
@@ -1253,126 +1174,6 @@ internal static class DivingPatch
 
     private static void Prefix(Character __instance, float dt, ref Vector3 ___m_moveDir, ref Vector3 ___m_lookDir,
         ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
-    {
-        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
-
-        // Do not use InWater() as the reset condition while a dive is active.
-        // The cached liquid-depth value can briefly report false during the
-        // transition below the surface; resetting m_swimDepth there restores
-        // the vanilla 1.6 target and launches the player back up.
-        if (player.IsOnGround() || player.IsDead() ||
-            (!player.InWater() && !DiveToggle && !IsActuallyUnderwater(player)))
-        {
-            DiveToggle = false;
-            player.m_swimDepth = 1.6f;
-            return;
-        }
-
-        float fixedDelta = Mathf.Max(dt, Time.fixedDeltaTime);
-        float depth = player.m_swimDepth;
-        float speed = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
-        bool directDive = IsDiveHeld();
-        bool surface = IsSurfaceHeld();
-
-        if (directDive && !surface)
-        {
-            depth += speed * fixedDelta;
-        }
-        else if (surface && !directDive)
-        {
-            depth -= speed * fixedDelta;
-        }
-        else if (DiveToggle)
-        {
-            // BetterDiving uses the look direction to control its target depth.
-            // Keep that behavior when the player looks up/down, but make the
-            // toggle itself descend instead of requiring a short input event to
-            // be observed by FixedUpdate. This is reliable with both keyboard
-            // and controller input and keeps the player underwater until the
-            // surface key/jump or an upward look is used.
-            if (___m_lookDir.y > 0.15f) depth -= speed * fixedDelta;
-            else depth += speed * fixedDelta;
-        }
-
-        player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
-        if (player.m_swimDepth > 2.5f && DiveToggle && IsForwardHeld()) player.SetMoveDir(___m_lookDir);
-
-        // BetterDiving keeps both native timers alive while the target is
-        // below the surface. This is what prevents the native controller from
-        // deciding that the player surfaced and applying the bounce impulse.
-        if (ShouldKeepNativeSwimming(player))
-        {
-            ___m_lastGroundTouch = 0.3f;
-            ___m_swimTimer = 0f;
-        }
-
-        if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || DiveToggle))
-            player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
-    }
-}
-
-// Input edge detection belongs in Player.Update. Reading GetButtonDown from a
-// fixed-update patch can miss the one rendered frame in which the button was
-// pressed, especially when the server/client frame and physics rates differ.
-[HarmonyPatch(typeof(Player), "Update")]
-internal static class DivingInputPatch
-{
-    private static void Prefix(Player __instance)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
-            !__instance.InWater() || __instance.IsOnGround() || __instance.IsDead()) return;
-
-        if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
-            DivingPatch.DiveToggle = !DivingPatch.DiveToggle;
-    }
-}
-
-[HarmonyPatch(typeof(Character), "UpdateMotion")]
-internal static class DivingMotionPatch
-{
-    [HarmonyPriority(Priority.First)]
-    private static void Prefix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
-    {
-        if (__instance is not Player player) return;
-        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
-        if (player.IsOnGround() || player.IsDead())
-        {
-            player.m_swimDepth = 1.6f;
-            return;
-        }
-
-        // This is the exact state BetterDiving maintains. Valheim's native
-        // UpdateSwimming applies an upward launch as soon as m_swimTimer is
-        // allowed to expire, even when m_swimDepth is still below the surface.
-        // Keep the native swimmer alive based on actual liquid depth, not the
-        // transient InWater() cache or the input toggle.
-        if (DivingPatch.IsActuallyUnderwater(player))
-        {
-            ___m_lastGroundTouch = 0.3f;
-            ___m_swimTimer = 0f;
-        }
-    }
-}
-
-[HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
-internal static class DivingCameraPatch
-{
-    private static readonly Dictionary<int, float> OriginalWaterDistance = new();
-    private static readonly Dictionary<int, float> OriginalMaxDistance = new();
-
-    private static void Prefix(GameCamera __instance, Camera ___m_camera)
-    {
-        Apply(__instance, ___m_camera);
-    }
-
-    private static void Postfix(GameCamera __instance, Camera ___m_camera)
-    {
-        Apply(__instance, ___m_camera);
-    }
-
-    private static void Apply(GameCamera __instance, Camera ___m_camera)
-    {
-        Pf float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
 
@@ -1622,7 +1423,177 @@ internal static class CurrencyUiPatch
     {
         if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) return;
         Plugin.CreatePocketUi(__instance);
-      in.SleepWaiting = waiting;
+        Plugin.SchedulePocketUiReposition(__instance);
+        Plugin.UpdatePocketUi();
+    }
+}
+
+[HarmonyPatch(typeof(InventoryGui), "Awake")]
+internal static class CurrencyUiAwakePatch
+{
+    private static void Postfix(InventoryGui __instance)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) Plugin.CreatePocketUi(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Game), "Start")]
+internal static class SleepRpcRegistrationPatch
+{
+    private static ZRoutedRpc RegisteredRpc;
+
+    private static void Postfix()
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.SleepSkip) || ZRoutedRpc.instance == null) return;
+        if (RegisteredRpc == ZRoutedRpc.instance) return;
+        RegisteredRpc = ZRoutedRpc.instance;
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.OpenPopup), new Action<long>(SleepRpc.OpenPopup));
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteYes), new Action<long, long>(SleepRpc.VoteYes));
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.VoteNo), new Action<long, long>(SleepRpc.VoteNo));
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.UpdateDisplay), new Action<long, string>(SleepRpc.UpdateDisplay));
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.Reset), new Action<long>(SleepRpc.Reset));
+        ZRoutedRpc.instance.Register(nameof(SleepRpc.Result), new Action<long, string>(SleepRpc.Result));
+    }
+}
+
+internal static class SleepRpc
+{
+    internal static void OpenPopup(long sender)
+    {
+        if (Player.m_localPlayer == null) return;
+        if (Plugin.SleepPopupOpen) return;
+        if (Plugin.SleepAutoAccept.Value)
+        {
+            Plugin.SleepPopupOpen = true;
+            Vote(true);
+            return;
+        }
+        Plugin.SleepPopupOpen = true;
+        UnifiedPopup.Push(new YesNoPopup("Skip the night?", Plugin.SleepVoteBody(), () => Vote(true), () => Vote(false)));
+    }
+
+    private static void Vote(bool yes)
+    {
+        if (ZRoutedRpc.instance == null) return;
+        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, yes ? nameof(VoteYes) : nameof(VoteNo), ZNet.GetUID());
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
+        Plugin.SleepPopupOpen = false;
+    }
+
+    internal static void VoteYes(long sender, long playerId)
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
+        Plugin.SleepYes.Add(playerId);
+        Plugin.SleepNo.Remove(playerId);
+    }
+
+    internal static void VoteNo(long sender, long playerId)
+    {
+        if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
+        Plugin.SleepNo.Add(playerId);
+        Plugin.SleepYes.Remove(playerId);
+    }
+
+    internal static void UpdateDisplay(long sender, string data)
+    {
+        string[] parts = data.Split(',');
+        if (parts.Length != 5) return;
+        int.TryParse(parts[0], out Plugin.SleepInBed);
+        int.TryParse(parts[1], out Plugin.SleepYesCount);
+        int.TryParse(parts[2], out Plugin.SleepNoCount);
+        int.TryParse(parts[3], out Plugin.SleepWaiting);
+        int.TryParse(parts[4], out Plugin.SleepTotal);
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null && UnifiedPopup.instance.bodyText != null)
+            UnifiedPopup.instance.bodyText.text = Plugin.SleepVoteBody();
+    }
+
+    internal static void Reset(long sender)
+    {
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
+        Plugin.SleepPopupOpen = false;
+        Plugin.SleepYes.Clear();
+        Plugin.SleepNo.Clear();
+        Plugin.SleepPopupSent.Clear();
+        Plugin.SleepVoteActive = false;
+        Plugin.SleepVoteStarted = DateTime.MinValue;
+        Plugin.SleepWarningStarted = DateTime.MinValue;
+        Plugin.LastSleepDisplay = null;
+        Plugin.SleepInBed = Plugin.SleepYesCount = Plugin.SleepNoCount = Plugin.SleepWaiting = Plugin.SleepTotal = 0;
+    }
+
+    internal static void Result(long sender, string message)
+    {
+        if (Player.m_localPlayer != null) Player.m_localPlayer.Message(MessageHud.MessageType.Center, message);
+        Reset(sender);
+    }
+
+    internal static void BroadcastReset()
+    {
+        if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, nameof(Reset));
+        Reset(0);
+    }
+}
+
+[HarmonyPatch(typeof(Game), "EverybodyIsTryingToSleep")]
+internal static class SleepSkipPatch
+{
+    private static readonly HashSet<long> CurrentPlayers = new();
+    private static readonly HashSet<long> InBed = new();
+
+    private static bool Prefix(ref bool __result)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.SleepSkip) || ZNet.instance == null || !ZNet.instance.IsServer()) return true;
+        List<ZDO> characters = ZNet.instance.GetAllCharacterZDOS();
+        int total = characters.Count;
+        if (total <= 0) { __result = false; return false; }
+        InBed.Clear();
+        foreach (ZDO zdo in characters) if (zdo.GetBool(ZDOVars.s_inBed)) InBed.Add(zdo.m_uid.UserID);
+        int inBed = InBed.Count;
+        if (inBed == 0 || (Plugin.SleepCooldownSeconds.Value > 0 && Plugin.LastSleepCompleted != DateTime.MinValue && DateTime.UtcNow < Plugin.LastSleepCompleted.AddSeconds(Plugin.SleepCooldownSeconds.Value)))
+        {
+            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
+            __result = false;
+            return false;
+        }
+        if (inBed >= total || (total > 1 && inBed < Plugin.SleepPlayersNeeded.Value))
+        {
+            if (Plugin.SleepVoteActive || Plugin.SleepWarningStarted != DateTime.MinValue || Plugin.SleepVoteStarted != DateTime.MinValue) SleepRpc.BroadcastReset();
+            __result = inBed >= total;
+            return false;
+        }
+
+        DateTime now = DateTime.UtcNow;
+        if (Plugin.SleepWarningSeconds.Value > 0 && Plugin.SleepWarningStarted == DateTime.MinValue)
+        {
+            Plugin.SleepWarningStarted = now;
+            __result = false;
+            return false;
+        }
+        if (Plugin.SleepWarningSeconds.Value > 0 && now < Plugin.SleepWarningStarted.AddSeconds(Plugin.SleepWarningSeconds.Value))
+        {
+            __result = false;
+            return false;
+        }
+
+        CurrentPlayers.Clear();
+        foreach (ZNetPeer peer in ZNet.instance.m_peers) CurrentPlayers.Add(peer.m_characterID.UserID);
+        if (!ZNet.instance.IsDedicated()) CurrentPlayers.Add(ZNet.GetUID());
+        Plugin.SleepYes.IntersectWith(CurrentPlayers);
+        Plugin.SleepNo.IntersectWith(CurrentPlayers);
+        Plugin.SleepYes.ExceptWith(InBed);
+        Plugin.SleepNo.ExceptWith(InBed);
+
+        int explicitYes = Plugin.SleepYes.Count(id => !InBed.Contains(id));
+        int explicitNo = Plugin.SleepNo.Count(id => !InBed.Contains(id));
+        int waiting = Math.Max(0, total - inBed - explicitYes - explicitNo);
+        bool timedOut = Plugin.SleepVoteStarted != DateTime.MinValue && Plugin.SleepVoteTimeoutSeconds.Value > 0 && now >= Plugin.SleepVoteStarted.AddSeconds(Plugin.SleepVoteTimeoutSeconds.Value);
+        if (timedOut) waiting = 0;
+        int effectiveTotal = Math.Max(1, total - (timedOut ? Math.Max(0, total - inBed - explicitYes - explicitNo) : 0));
+        int yes = inBed + explicitYes;
+        Plugin.SleepInBed = inBed;
+        Plugin.SleepYesCount = explicitYes;
+        Plugin.SleepNoCount = explicitNo;
+        Plugin.SleepWaiting = waiting;
         Plugin.SleepTotal = total;
 
         if (!Plugin.SleepVoteActive)
