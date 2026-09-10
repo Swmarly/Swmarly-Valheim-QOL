@@ -480,7 +480,7 @@ public sealed class Plugin : BaseUnityPlugin
             ? gridRect.anchoredPosition + new Vector2(gridRect.rect.width * 0.5f + 70f, 0f)
             : Vector2.zero;
         pocketRect.anchoredPosition = position;
-        pocketRect.SetAsLastSibling();
+        SetPocketUiNativeLayer(gui, inventoryRoot, null, null);
     }
 
     internal static Transform GetPocketLayoutRoot(InventoryGui gui)
@@ -515,6 +515,47 @@ public sealed class Plugin : BaseUnityPlugin
     private static string NormalizeUiName(string name)
     {
         return (name ?? string.Empty).Replace("(Clone)", string.Empty).Trim();
+    }
+
+    private static Transform GetImmediateChildUnder(Transform target, Transform parent)
+    {
+        if (target == null || parent == null) return null;
+        Transform current = target;
+        while (current != null && current.parent != parent)
+            current = current.parent;
+        return current != null && current.parent == parent ? current : null;
+    }
+
+    private static void SetPocketUiNativeLayer(InventoryGui gui, Transform inventoryRoot, Transform armor, Transform weight)
+    {
+        RectTransform pocketRect = PocketUi == null ? null : PocketUi.GetComponent<RectTransform>();
+        if (pocketRect == null || inventoryRoot == null || pocketRect.parent != inventoryRoot) return;
+
+        // The stock Armor and Weight cards are siblings in InventoryGui's
+        // player panel. Use their actual sibling layer instead of putting the
+        // pocket at the top of the hierarchy. SetSiblingIndex inserts before
+        // the reference, so the inventory's native card can still render in
+        // front of the pocket at shared edges.
+        int nativeLayer = int.MaxValue;
+        Transform armorRoot = GetImmediateChildUnder(armor, inventoryRoot);
+        Transform weightRoot = GetImmediateChildUnder(weight, inventoryRoot);
+        if (armorRoot != null) nativeLayer = Mathf.Min(nativeLayer, armorRoot.GetSiblingIndex());
+        if (weightRoot != null) nativeLayer = Mathf.Min(nativeLayer, weightRoot.GetSiblingIndex());
+
+        // If an inventory-layout mod nested the stat cards somewhere else,
+        // use the player grid's root sibling as the same visual layer. This
+        // keeps the fallback deterministic without changing the pocket's
+        // already-correct position.
+        if (nativeLayer == int.MaxValue && gui?.m_playerGrid != null)
+        {
+            Transform gridRoot = GetImmediateChildUnder(gui.m_playerGrid.transform, inventoryRoot);
+            if (gridRoot != null) nativeLayer = gridRoot.GetSiblingIndex();
+        }
+
+        if (nativeLayer != int.MaxValue)
+            pocketRect.SetSiblingIndex(Mathf.Max(0, nativeLayer));
+        else
+            pocketRect.SetAsFirstSibling();
     }
 
     private static readonly HashSet<int> PocketUiWarnings = new();
@@ -685,9 +726,7 @@ public sealed class Plugin : BaseUnityPlugin
         Vector3 targetLocal = inventoryRoot.InverseTransformPoint(targetWorld);
         pocketRect.localPosition = new Vector3(targetLocal.x, targetLocal.y, pocketRect.localPosition.z);
 
-        // Keep it on top of layout siblings so another card cannot cover it.
-        if (pocketRect.parent != null)
-            pocketRect.SetAsLastSibling();
+        SetPocketUiNativeLayer(InventoryGui.m_instance, inventoryRoot, armor, weight);
     }
 
     private static void SetPocketIcon()
@@ -1581,13 +1620,14 @@ internal static class DivingPatch
     // Valheim's IsOnGround also becomes true when the player is standing on
     // the seabed. That is not a land/surface reset condition: resetting the
     // swim target there to 1.6 metres is exactly what launches a diver back to
-    // the surface. Only treat ground contact as valid for an active dive when
-    // the liquid column is genuinely deeper than the dive threshold.
+    // the surface. The target depth may be deeper than the available water
+    // column, especially in shallow water; the native collider should hold
+    // the player at the seabed instead of this patch resetting the swim state.
     internal static bool IsDiveGroundContact(Player player)
     {
         return player != null && player.IsOnGround() &&
                (DiveToggle || IsUnderwater || HasDiveTarget(player)) &&
-               Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 2.5f;
+               (Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.01f || player.InWater());
     }
 
     internal static bool ShouldKeepNativeSwimming(Player player)
