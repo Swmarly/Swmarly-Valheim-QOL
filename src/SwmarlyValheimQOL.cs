@@ -9,6 +9,7 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
@@ -19,7 +20,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.2";
+    public const string PluginVersion = "1.0.3";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -63,6 +64,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static int LastPocketValue;
     internal static GameObject PocketUi;
     internal static Button PocketExtractButton;
+    internal static Button PocketDepositButton;
     internal static TextMeshProUGUI PocketText;
     internal static Coroutine PocketUiRepositionCoroutine;
 
@@ -77,6 +79,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static int SleepWaiting;
     internal static int SleepTotal;
     internal static bool SleepVoteActive;
+    internal static bool SleepPopupOpen;
     internal static DateTime SleepWarningStarted = DateTime.MinValue;
     internal static int SleepLastWarning = -1;
 
@@ -84,6 +87,10 @@ public sealed class Plugin : BaseUnityPlugin
     {
         Instance = this;
         BindConfig();
+        // Persist the file before Harmony touches any client-only UI methods.
+        // This guarantees a config is created on a headless dedicated server
+        // even when another server plugin changes the available UI surface.
+        Config.Save();
         Harmony.PatchAll(typeof(Plugin).Assembly);
         Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
     }
@@ -132,6 +139,11 @@ public sealed class Plugin : BaseUnityPlugin
         return setting != null && setting.Value;
     }
 
+    internal static bool IsLocalPlayer(Player player)
+    {
+        return player != null && Player.m_localPlayer == player;
+    }
+
     internal static int GetPocketCoins(Player player)
     {
         if (player == null || player.m_customData == null || !player.m_customData.TryGetValue(CoinKey, out string value)) return 0;
@@ -177,6 +189,33 @@ public sealed class Plugin : BaseUnityPlugin
         SetPocketCoins(player, 0);
     }
 
+    internal static void DepositInventoryCoins()
+    {
+        Player player = Player.m_localPlayer;
+        if (player == null) return;
+        Inventory inventory = player.GetInventory();
+        int coins = inventory.CountItems(CoinToken);
+        if (coins <= 0) return;
+
+        inventory.RemoveItem(CoinToken, coins);
+        SetPocketCoins(player, GetPocketCoins(player) + coins);
+    }
+
+    internal static bool DepositDraggedCoins()
+    {
+        Player player = Player.m_localPlayer;
+        InventoryGui gui = InventoryGui.m_instance;
+        if (player == null || gui == null || gui.m_dragItem == null || gui.m_dragInventory == null || gui.m_dragAmount <= 0) return false;
+        if (gui.m_dragItem.m_shared == null || gui.m_dragItem.m_shared.m_name != CoinToken) return false;
+
+        int amount = Mathf.Min(gui.m_dragAmount, gui.m_dragItem.m_stack);
+        if (amount <= 0) return false;
+        gui.m_dragInventory.RemoveItem(gui.m_dragItem, amount);
+        SetPocketCoins(player, GetPocketCoins(player) + amount);
+        gui.SetupDragItem(null, null, 1);
+        return true;
+    }
+
     internal static void CreatePocketUi(InventoryGui gui)
     {
         if (!IsFeatureEnabled(CurrencyPocket) || gui == null || gui.m_player == null) return;
@@ -194,6 +233,7 @@ public sealed class Plugin : BaseUnityPlugin
 
         PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
         PocketUi.name = "SwmarlyValheimQOL_CurrencyPocket";
+        PocketUi.AddComponent<CurrencyPocketDropTarget>();
         RepositionPocketUi(inventoryRoot, armor, weight);
         SetPocketIcon();
         Transform text = Utils.FindChild(PocketUi.transform, "ac_text");
@@ -211,6 +251,16 @@ public sealed class Plugin : BaseUnityPlugin
             PocketExtractButton.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
             PocketExtractButton.onClick = new Button.ButtonClickedEvent();
             PocketExtractButton.onClick.AddListener(ExtractPocketCoins);
+
+            PocketDepositButton = Object.Instantiate(gui.m_takeAllButton, PocketUi.transform);
+            PocketDepositButton.name = "SwmarlyValheimQOL_DepositCoins";
+            TextMeshProUGUI depositText = PocketDepositButton.GetComponentInChildren<TextMeshProUGUI>();
+            if (depositText != null) depositText.text = "↓";
+            RectTransform depositRect = PocketDepositButton.GetComponent<RectTransform>();
+            if (depositRect != null) depositRect.localPosition = new Vector3(-11f, -20f, 0f);
+            PocketDepositButton.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
+            PocketDepositButton.onClick = new Button.ButtonClickedEvent();
+            PocketDepositButton.onClick.AddListener(DepositInventoryCoins);
         }
     }
 
@@ -246,35 +296,31 @@ public sealed class Plugin : BaseUnityPlugin
         RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
         if (pocketRect == null || armorRect == null) return;
 
-        // Keep the pocket in the same UI layer as Armor and place it in the
-        // empty slot between Armor and Weight. Setting the sibling index is
-        // important when another inventory mod adds its own number text.
-        pocketRect.SetSiblingIndex(armor.GetSiblingIndex());
-        pocketRect.anchoredPosition = weightRect == null
-            ? armorRect.anchoredPosition + new Vector2(0f, -48f)
-            : new Vector2(armorRect.anchoredPosition.x, (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
+        // Expanded inventory mods reposition Armor and Weight after vanilla
+        // layout. Place the pocket from the final rendered bounds instead of
+        // relying on a fixed -234 offset that overlaps their number fields.
+        Transform reference = weight != null ? weight : armor;
+        RectTransform referenceRect = reference.GetComponent<RectTransform>();
+        if (referenceRect == null || referenceRect.parent != pocketRect.parent) return;
+        Canvas.ForceUpdateCanvases();
 
-        // Quick-stack/Jewelcrafting-style layouts move the Armor and Weight
-        // rows after InventoryGui.Show. Keep the pocket out of their overlay.
-        var plugins = BepInEx.Bootstrap.Chainloader.PluginInfos;
-        bool expandedInventory = plugins.ContainsKey("goldenrevolver.quick_stack_store") ||
-                                  plugins.ContainsKey("org.bepinex.plugins.jewelcrafting") ||
-                                  plugins.ContainsKey("randyknapp.mods.equipmentandquickslots") ||
-                                  plugins.ContainsKey("Azumatt.AzuExtendedPlayerInventory");
-        if (expandedInventory)
-        {
-            // These inventory layouts add several rows below Armor. This is
-            // the compatibility position used by CurrencyPocket and is far
-            // enough below the armor-number overlay to remain clickable.
-            pocketRect.anchoredPosition = armorRect.anchoredPosition + new Vector2(0f, -234f);
-        }
-        else if (weightRect != null)
-        {
-            // Leave a full icon-height gap from the armor number instead of
-            // putting the coin count directly on the midpoint used by the
-            // vanilla layout.
-            pocketRect.anchoredPosition = new Vector2(armorRect.anchoredPosition.x, (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f - 45f);
-        }
+        Vector3[] referenceCorners = new Vector3[4];
+        Vector3[] pocketCorners = new Vector3[4];
+        referenceRect.GetWorldCorners(referenceCorners);
+        pocketRect.GetWorldCorners(pocketCorners);
+        Transform parent = pocketRect.parent;
+        float referenceBottom = parent.InverseTransformPoint(referenceCorners[0]).y;
+        float referenceCenterX = parent.InverseTransformPoint((referenceCorners[0] + referenceCorners[2]) * 0.5f).x;
+        Vector3 pocketMin = parent.InverseTransformPoint(pocketCorners[0]);
+        Vector3 pocketMax = parent.InverseTransformPoint(pocketCorners[2]);
+        float pocketHeight = Mathf.Abs(pocketMax.y - pocketMin.y);
+        float referenceGap = Mathf.Max(8f, pocketHeight * 0.12f);
+        float desiredCenterY = referenceBottom - referenceGap - pocketHeight * 0.5f;
+        Vector3 desiredPivot = parent.InverseTransformPoint(pocketRect.position);
+        desiredPivot.x = referenceCenterX;
+        desiredPivot.y = desiredCenterY + (pocketRect.pivot.y - 0.5f) * pocketHeight;
+        pocketRect.position = parent.TransformPoint(desiredPivot);
+        pocketRect.SetSiblingIndex(Mathf.Min(reference.GetSiblingIndex() + 1, pocketRect.parent.childCount - 1));
     }
 
     private static void SetPocketIcon()
@@ -294,8 +340,13 @@ internal static class FloatingItemsPatch
 {
     private static void Postfix(ItemDrop __instance)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.FloatItems)) return;
-        GameObject go = __instance.gameObject;
+        EnsureFloating(__instance);
+    }
+
+    internal static void EnsureFloating(ItemDrop itemDrop)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.FloatItems) || itemDrop == null) return;
+        GameObject go = itemDrop.gameObject;
         if (go.GetComponent<Rigidbody>() == null && go.GetComponentInChildren<Rigidbody>() == null) return;
         if (go.GetComponent<ZNetView>() == null && go.GetComponentInChildren<ZNetView>() == null) return;
         Floating floating = go.GetComponent<Floating>() ?? go.AddComponent<Floating>();
@@ -304,76 +355,171 @@ internal static class FloatingItemsPatch
     }
 }
 
-[HarmonyPatch(typeof(Character), "IsSwimming")]
-internal static class EquipmentInWaterPatch
+[HarmonyPatch(typeof(ItemDrop), "Start")]
+internal static class FloatingItemsStartPatch
 {
-    private static bool Prefix(Character __instance, ref bool __result, float ___m_swimTimer)
+    private static void Postfix(ItemDrop __instance)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || !__instance.IsPlayer() || ___m_swimTimer >= 0.5f) return true;
-        StackTrace trace = new();
-        for (int i = 2; i < trace.FrameCount && i < 10; i++)
+        // Some network-spawned drops receive their ZNetView after Awake.
+        FloatingItemsPatch.EnsureFloating(__instance);
+    }
+}
+
+internal static class EquipmentMovementSupport
+{
+    private static readonly FieldInfo RunIntentField = AccessTools.Field(typeof(Character), "m_run");
+    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running");
+
+    private static bool GetFlag(FieldInfo field, Character character)
+    {
+        return field != null && field.GetValue(character) is bool value && value;
+    }
+
+    private static void SetFlag(FieldInfo field, Character character, bool value)
+    {
+        if (field != null) field.SetValue(character, value);
+    }
+
+    internal static bool IsRunning(Player player)
+    {
+        if (player == null) return false;
+        return GetFlag(RunIntentField, player) || GetFlag(RunningField, player) ||
+               (Plugin.IsLocalPlayer(player) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun")));
+    }
+
+    internal sealed class State
+    {
+        internal bool Changed;
+        internal bool OldRun;
+        internal bool OldRunning;
+    }
+
+    internal static State SuspendRunning(Player player)
+    {
+        State state = new()
         {
-            string name = trace.GetFrame(i)?.GetMethod()?.Name ?? string.Empty;
-            if (name == "EquipItem" || name == "UpdateEquipment")
-            {
-                __result = false;
-                return false;
-            }
+            OldRun = GetFlag(RunIntentField, player),
+            OldRunning = GetFlag(RunningField, player)
+        };
+        state.Changed = state.OldRun || state.OldRunning;
+        if (state.Changed)
+        {
+            // Valheim checks m_run in input/equipment code and m_running in
+            // movement code. Clearing only one is why the previous patch did
+            // not work reliably during a sprint transition.
+            SetFlag(RunIntentField, player, false);
+            SetFlag(RunningField, player, false);
         }
-        return true;
+        return state;
+    }
+
+    internal static void RestoreRunning(Player player, State state)
+    {
+        if (player == null || state == null || !state.Changed) return;
+        SetFlag(RunIntentField, player, state.OldRun);
+        SetFlag(RunningField, player, state.OldRunning);
     }
 }
 
 [HarmonyPatch(typeof(Player), "UseHotbarItem")]
-internal static class EquipWhileRunningPatch
+internal static class EquipWhileRunningHotbarPatch
 {
-    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running") ?? AccessTools.Field(typeof(Character), "m_run");
-
     private static bool Prefix(Player __instance, int index)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning)) return true;
-        bool running = __instance.IsRunning();
-        if (!running && Player.m_localPlayer == __instance)
-            running = ZInput.GetButton("Run") || ZInput.GetButton("JoyRun");
-        if (!running) return true;
-
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !EquipmentMovementSupport.IsRunning(__instance)) return true;
         ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
         if (item == null) return true;
 
-        // UseItem eventually calls EquipItem. Temporarily clear the private
-        // movement flag for the complete call so both the hotbar entry point
-        // and the equip gate see a legal movement state.
-        bool changedRunning = RunningField != null && (bool)RunningField.GetValue(__instance);
-        if (changedRunning) RunningField.SetValue(__instance, false);
+        EquipmentMovementSupport.State state = EquipmentMovementSupport.SuspendRunning(__instance);
         try
         {
+            // Bypass Player.UseHotbarItem's early running check and enter the
+            // same UseItem path as a normal hotbar activation.
             __instance.UseItem(__instance.GetInventory(), item, false);
         }
         finally
         {
-            if (changedRunning) RunningField.SetValue(__instance, true);
+            EquipmentMovementSupport.RestoreRunning(__instance, state);
         }
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "UseItem")]
+internal static class EquipWhileRunningUseItemPatch
+{
+    private static void Prefix(Humanoid __instance, Inventory inventory, ItemDrop.ItemData item, ref EquipmentMovementSupport.State __state)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
+        if (inventory != null && inventory != player.GetInventory()) return;
+        __state = EquipmentMovementSupport.SuspendRunning(player);
+    }
+
+    private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
+    {
+        if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
     }
 }
 
 [HarmonyPatch(typeof(Humanoid), "EquipItem")]
 internal static class EquipWhileRunningEquipItemPatch
 {
-    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running") ?? AccessTools.Field(typeof(Character), "m_run");
-
-    private static void Prefix(Humanoid __instance, ref bool __state)
+    private static void Prefix(Humanoid __instance, ref EquipmentMovementSupport.State __state)
     {
-        __state = false;
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player || RunningField == null) return;
-        if (!(bool)RunningField.GetValue(__instance)) return;
-        RunningField.SetValue(__instance, false);
-        __state = true;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
+        __state = EquipmentMovementSupport.SuspendRunning(player);
     }
 
-    private static void Postfix(Humanoid __instance, bool __state)
+    private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
     {
-        if (__state && RunningField != null) RunningField.SetValue(__instance, true);
+        if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "EquipItem")]
+internal static class EquipmentInWaterEquipPatch
+{
+    private sealed class State
+    {
+        internal bool Changed;
+        internal float OldSwimTimer;
+    }
+
+    private static void Prefix(Humanoid __instance, ref float ___m_swimTimer, ref State __state)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return;
+        __state = new State { Changed = true, OldSwimTimer = ___m_swimTimer };
+        // Humanoid.EquipItem rejects swimming players through IsSwimming().
+        // Temporarily present a non-swimming state for the equip transaction,
+        // then restore the real swimming timer immediately afterward.
+        ___m_swimTimer = 1f;
+    }
+
+    private static void Postfix(ref float ___m_swimTimer, State __state)
+    {
+        if (__state != null && __state.Changed) ___m_swimTimer = __state.OldSwimTimer;
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "UpdateEquipment")]
+internal static class EquipmentInWaterUpdatePatch
+{
+    private sealed class State
+    {
+        internal bool Changed;
+        internal float OldSwimTimer;
+    }
+
+    private static void Prefix(Humanoid __instance, ref float ___m_swimTimer, ref State __state)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return;
+        __state = new State { Changed = true, OldSwimTimer = ___m_swimTimer };
+        ___m_swimTimer = 1f;
+    }
+
+    private static void Postfix(ref float ___m_swimTimer, State __state)
+    {
+        if (__state != null && __state.Changed) ___m_swimTimer = __state.OldSwimTimer;
     }
 }
 
@@ -442,7 +588,7 @@ internal static class PlayerQolUpdatePatch
 {
     private static readonly Dictionary<int, float> BaseCrouchSpeed = new();
     private static readonly Dictionary<int, float> BaseSwimSpeed = new();
-    private static float nextSitHeal;
+    private static readonly Dictionary<int, float> NextSitHeal = new();
 
     private static void Prefix(Player __instance)
     {
@@ -458,39 +604,46 @@ internal static class PlayerQolUpdatePatch
             if (!BaseSwimSpeed.ContainsKey(id)) BaseSwimSpeed[id] = __instance.m_swimSpeed;
             float factor = __instance.m_skills == null ? 0f : __instance.m_skills.GetSkillFactor(Skills.SkillType.Swim);
             float speed = BaseSwimSpeed[id] * Mathf.Lerp(1f, Plugin.MaxSwimSpeedMultiplier.Value, factor);
-            if (Plugin.SwimSprint.Value && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
+            if (Plugin.SwimSprint.Value && Plugin.IsLocalPlayer(__instance) && (ZInput.GetButton("Run") || ZInput.GetButton("JoyRun"))) speed *= 1.25f;
             __instance.m_swimSpeed = speed;
         }
     }
 
     private static void Postfix(Player __instance)
     {
-        if (Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
+        if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
             __instance.UseStamina(-Plugin.SwimIdleStaminaPerSecond.Value * Time.deltaTime);
 
-        if (Plugin.IsFeatureEnabled(Plugin.Diving) && __instance.IsSwimming())
+        int id = __instance.GetInstanceID();
+        if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SitRegeneration) && __instance.IsSitting() &&
+            (!NextSitHeal.TryGetValue(id, out float nextHeal) || Time.time >= nextHeal) && __instance.GetHealth() < __instance.GetMaxHealth())
         {
-            Rigidbody body = __instance.GetComponent<Rigidbody>();
-            if (body != null)
-            {
-                float targetY = 0f;
-                if (Plugin.DiveKey.Value.IsDown()) targetY = -Plugin.DiveSpeed.Value;
-                else if (Plugin.SurfaceKey.Value.IsDown()) targetY = Plugin.DiveSpeed.Value;
-                if (Mathf.Abs(targetY) > 0.01f)
-                {
-                    Vector3 velocity = body.velocity;
-                    velocity.y = Mathf.MoveTowards(velocity.y, targetY, Plugin.DiveSpeed.Value * 4f * Time.deltaTime);
-                    body.velocity = velocity;
-                    __instance.UseStamina(Plugin.DiveStaminaPerSecond.Value * Time.deltaTime);
-                }
-            }
-        }
-
-        if (Plugin.IsFeatureEnabled(Plugin.SitRegeneration) && __instance.IsSitting() && Time.time >= nextSitHeal && __instance.GetHealth() < __instance.GetMaxHealth())
-        {
-            nextSitHeal = Time.time + 1f;
+            NextSitHeal[id] = Time.time + 1f;
             __instance.Heal(Plugin.SitHealPerSecond.Value);
         }
+    }
+}
+
+[HarmonyPatch(typeof(Character), "UpdateSwimming")]
+internal static class DivingPatch
+{
+    private static void Postfix(Character __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || __instance is not Player player || !Plugin.IsLocalPlayer(player) || !player.IsSwimming()) return;
+        Rigidbody body = player.GetComponent<Rigidbody>();
+        if (body == null) return;
+
+        bool diving = Plugin.DiveKey.Value.IsPressed();
+        bool surfacing = Plugin.SurfaceKey.Value.IsPressed();
+        if (diving == surfacing) return;
+
+        float direction = diving ? -1f : 1f;
+        float speed = Plugin.DiveSpeed.Value;
+        float dt = Mathf.Max(Time.fixedDeltaTime, 0.001f);
+        Vector3 velocity = body.velocity;
+        velocity.y = Mathf.MoveTowards(velocity.y, direction * speed, speed * 6f * dt);
+        body.velocity = velocity;
+        if (Plugin.DiveStaminaPerSecond.Value > 0f) player.UseStamina(Plugin.DiveStaminaPerSecond.Value * dt);
     }
 }
 
@@ -514,6 +667,41 @@ internal static class CurrencyPickupPatch
         player.ShowPickupMessage(drop.m_itemData, amount);
         __result = true;
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "AutoPickup")]
+internal static class CurrencyAutoPickupContextPatch
+{
+    internal static bool Active;
+
+    private static void Prefix()
+    {
+        Active = true;
+    }
+
+    private static void Finalizer()
+    {
+        Active = false;
+    }
+}
+
+[HarmonyPatch(typeof(Inventory), "CanAddItem", typeof(ItemDrop.ItemData), typeof(int))]
+internal static class CurrencyAutoPickupCapacityPatch
+{
+    private static void Postfix(ItemDrop.ItemData item, ref bool __result)
+    {
+        if (!__result && CurrencyAutoPickupContextPatch.Active && Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) &&
+            item?.m_shared != null && item.m_shared.m_name == Plugin.CoinToken)
+            __result = true;
+    }
+}
+
+internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHandler
+{
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        Plugin.DepositDraggedCoins();
     }
 }
 
@@ -568,11 +756,13 @@ internal static class SleepRpc
     internal static void OpenPopup(long sender)
     {
         if (Player.m_localPlayer == null) return;
+        if (Plugin.SleepPopupOpen) return;
         if (Plugin.SleepAutoAccept.Value)
         {
             Vote(true);
             return;
         }
+        Plugin.SleepPopupOpen = true;
         UnifiedPopup.Push(new YesNoPopup("Skip the night?", Plugin.SleepVoteBody(), () => Vote(true), () => Vote(false)));
     }
 
@@ -580,7 +770,8 @@ internal static class SleepRpc
     {
         if (ZRoutedRpc.instance == null) return;
         ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, yes ? nameof(VoteYes) : nameof(VoteNo), ZNet.GetUID());
-        if (UnifiedPopup.instance != null) UnifiedPopup.Pop();
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
+        Plugin.SleepPopupOpen = false;
     }
 
     internal static void VoteYes(long sender, long playerId)
@@ -610,6 +801,8 @@ internal static class SleepRpc
 
     internal static void Reset(long sender)
     {
+        if (Plugin.SleepPopupOpen && UnifiedPopup.instance != null) UnifiedPopup.Pop();
+        Plugin.SleepPopupOpen = false;
         Plugin.SleepYes.Clear();
         Plugin.SleepNo.Clear();
         Plugin.SleepPopupSent.Clear();
@@ -623,6 +816,12 @@ internal static class SleepRpc
     {
         if (Player.m_localPlayer != null) Player.m_localPlayer.Message(MessageHud.MessageType.Center, message);
         Reset(sender);
+    }
+
+    internal static void BroadcastReset()
+    {
+        if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, nameof(Reset));
+        Reset(0);
     }
 }
 
@@ -643,13 +842,13 @@ internal static class SleepSkipPatch
         int inBed = InBed.Count;
         if (inBed == 0 || (Plugin.SleepCooldownSeconds.Value > 0 && Plugin.LastSleepCompleted != DateTime.MinValue && DateTime.UtcNow < Plugin.LastSleepCompleted.AddSeconds(Plugin.SleepCooldownSeconds.Value)))
         {
-            if (Plugin.SleepVoteActive) SleepRpc.Reset(0);
+            if (Plugin.SleepVoteActive) SleepRpc.BroadcastReset();
             __result = false;
             return false;
         }
         if (inBed >= total || (total > 1 && inBed < Plugin.SleepPlayersNeeded.Value))
         {
-            if (Plugin.SleepVoteActive) SleepRpc.Reset(0);
+            if (Plugin.SleepVoteActive) SleepRpc.BroadcastReset();
             __result = inBed >= total;
             return false;
         }
@@ -690,16 +889,18 @@ internal static class SleepSkipPatch
         {
             Plugin.SleepVoteActive = true;
             Plugin.SleepVoteStarted = now;
-            foreach (ZNetPeer peer in ZNet.instance.m_peers)
-            {
-                if (!InBed.Contains(peer.m_characterID.UserID))
-                {
-                    ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_characterID.UserID, nameof(SleepRpc.OpenPopup));
-                    Plugin.SleepPopupSent.Add(peer.m_characterID.UserID);
-                }
-            }
-            if (!ZNet.instance.IsDedicated() && !InBed.Contains(ZNet.GetUID())) SleepRpc.OpenPopup(0);
         }
+
+        // Send the popup to every eligible player that was not already
+        // notified. This also handles a player joining after the vote starts.
+        foreach (ZNetPeer peer in ZNet.instance.m_peers)
+        {
+            if (!InBed.Contains(peer.m_characterID.UserID) && Plugin.SleepPopupSent.Add(peer.m_characterID.UserID))
+            {
+                ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_characterID.UserID, nameof(SleepRpc.OpenPopup));
+            }
+        }
+        if (!ZNet.instance.IsDedicated() && !InBed.Contains(ZNet.GetUID())) SleepRpc.OpenPopup(0);
         string display = $"{inBed},{explicitYes},{explicitNo},{waiting},{total}";
         foreach (ZNetPeer peer in ZNet.instance.m_peers) ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_characterID.UserID, nameof(SleepRpc.UpdateDisplay), display);
         if (!ZNet.instance.IsDedicated()) SleepRpc.UpdateDisplay(0, display);
@@ -710,7 +911,6 @@ internal static class SleepSkipPatch
         {
             Plugin.LastSleepCompleted = now;
             ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, nameof(SleepRpc.Result), "Sleep vote passed.");
-            ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.Everybody, nameof(SleepRpc.Reset));
             __result = true;
             return false;
         }
