@@ -333,7 +333,11 @@ public sealed class Plugin : BaseUnityPlugin
         if (weight == null) weight = FindDescendant(gui.transform, "Weight");
         if (armor == null && weight == null)
         {
-            LogPocketUiWarning(gui, "Armor/Weight anchors were not present after InventoryGui.Show; the pocket will retry on the next UI rebuild.");
+            // Do not make the feature disappear when an inventory-layout mod
+            // renames or removes the stock cards. Create a small self-contained
+            // target under the live player panel as a visible fallback; it is
+            // also a valid drag target for depositing inventory coins.
+            CreateFallbackPocketUi(gui, inventoryRoot);
             return;
         }
         Transform source = armor ?? weight;
@@ -395,6 +399,64 @@ public sealed class Plugin : BaseUnityPlugin
         CanvasGroup pocketCanvas = PocketUi.GetComponent<CanvasGroup>();
         if (pocketCanvas != null) pocketCanvas.blocksRaycasts = true;
         SetPocketIcon();
+    }
+
+    private static void CreateFallbackPocketUi(InventoryGui gui, Transform inventoryRoot)
+    {
+        if (PocketUi == null || !PocketUi || !PocketUi.transform.IsChildOf(inventoryRoot))
+        {
+            Transform existing = FindDescendant(inventoryRoot, PocketUiName);
+            PocketUi = existing != null ? existing.gameObject : null;
+        }
+
+        if (PocketUi == null)
+        {
+            PocketUi = new GameObject(PocketUiName, typeof(RectTransform), typeof(Image), typeof(CurrencyPocketDropTarget));
+            PocketUi.transform.SetParent(inventoryRoot, false);
+            Image background = PocketUi.GetComponent<Image>();
+            background.color = new Color(0.08f, 0.06f, 0.05f, 0.9f);
+
+            GameObject textObject = new("ac_text", typeof(RectTransform), typeof(TextMeshProUGUI));
+            textObject.transform.SetParent(PocketUi.transform, false);
+            RectTransform textRect = textObject.GetComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = new Vector2(6f, 6f);
+            textRect.offsetMax = new Vector2(-6f, -6f);
+            TextMeshProUGUI text = textObject.GetComponent<TextMeshProUGUI>();
+            text.alignment = TextAlignmentOptions.Center;
+            text.fontSize = 20f;
+            text.color = Color.yellow;
+            text.enableWordWrapping = false;
+        }
+
+        PocketUi.SetActive(true);
+        CurrencyPocketDropTarget[] targets = PocketUi.GetComponents<CurrencyPocketDropTarget>();
+        if (targets.Length == 0) PocketUi.AddComponent<CurrencyPocketDropTarget>();
+        PocketText = Utils.FindChild(PocketUi.transform, "ac_text")?.GetComponent<TextMeshProUGUI>();
+        if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
+        EnsurePocketButtons(gui);
+        PositionFallbackPocketUi(gui, inventoryRoot);
+        UpdatePocketUi();
+        LogPocketUiWarning(gui, "Armor/Weight anchors were not present; using the visible fallback pocket target.");
+    }
+
+    private static void PositionFallbackPocketUi(InventoryGui gui, Transform inventoryRoot)
+    {
+        RectTransform pocketRect = PocketUi?.GetComponent<RectTransform>();
+        if (pocketRect == null) return;
+        if (pocketRect.parent != inventoryRoot) pocketRect.SetParent(inventoryRoot, false);
+        pocketRect.anchorMin = new Vector2(0.5f, 0.5f);
+        pocketRect.anchorMax = new Vector2(0.5f, 0.5f);
+        pocketRect.pivot = new Vector2(0.5f, 0.5f);
+        pocketRect.sizeDelta = new Vector2(110f, 58f);
+
+        RectTransform gridRect = gui?.m_playerGrid?.GetComponent<RectTransform>();
+        Vector2 position = gridRect != null
+            ? gridRect.anchoredPosition + new Vector2(gridRect.rect.width * 0.5f + 70f, 0f)
+            : Vector2.zero;
+        pocketRect.anchoredPosition = position;
+        pocketRect.SetAsLastSibling();
     }
 
     internal static Transform GetPocketLayoutRoot(InventoryGui gui)
@@ -752,7 +814,7 @@ internal static class AutoReplantState
         // The tree ZDO has one owner. Only that owner schedules the replacement
         // so a dedicated server plus several clients cannot plant duplicates.
         ZNetView nview = destructible.GetComponent<ZNetView>() ?? destructible.GetComponentInParent<ZNetView>();
-        if (nview != null && nview.IsValid() && !nview.IsOwner()) return;
+        if (nview != null && !nview.IsOwner()) return;
 
         GameObject sapling = ZNetScene.instance.GetPrefab(saplingName);
         if (sapling == null)
