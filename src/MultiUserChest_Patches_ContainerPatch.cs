@@ -23,6 +23,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(Container), nameof(Container.Awake)), HarmonyPostfix]
         public static void ContainerAwakePatch(Container __instance) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             __instance.gameObject.AddComponent<ContainerExtend>();
 
             if (__instance.IgnoreInventory()) {
@@ -37,6 +38,7 @@ namespace SwmarlyValheimQOL {
         // This could maybe converted to a transpiler but is currently not worth it as the order of the statements have to be changed
         [HarmonyPatch(typeof(Container), nameof(Container.RPC_RequestOpen)), HarmonyPrefix]
         public static bool ContainerRPC_RequestOpenPatch(Container __instance, long uid, long playerID) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
             if (__instance.IgnoreInventory() || !__instance.m_nview.IsOwner()) {
                 return true;
             }
@@ -60,6 +62,7 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(Container), nameof(Container.RPC_RequestStack)), HarmonyPrefix]
         public static bool ContainerRPC_RequestStackPatch(Container __instance, long uid, long playerID) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
             if (__instance.IgnoreInventory() || !__instance.m_nview.IsOwner()) {
                 return true;
             }
@@ -88,4 +91,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-
