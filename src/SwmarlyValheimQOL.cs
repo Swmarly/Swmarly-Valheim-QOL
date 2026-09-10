@@ -123,8 +123,32 @@ public sealed class Plugin : BaseUnityPlugin
         // This guarantees a config is created on a headless dedicated server
         // even when another server plugin changes the available UI surface.
         Config.Save();
-        Harmony.PatchAll(typeof(Plugin).Assembly);
+        ApplyHarmonyPatches();
         Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
+    }
+
+    private void ApplyHarmonyPatches()
+    {
+        int patchedTypes = 0;
+        foreach (Type type in AccessTools.GetTypesFromAssembly(typeof(Plugin).Assembly))
+        {
+            if (type.GetCustomAttributes(typeof(HarmonyPatch), false).Length == 0) continue;
+
+            try
+            {
+                Harmony.CreateClassProcessor(type).Patch();
+                patchedTypes++;
+            }
+            catch (Exception exception)
+            {
+                // One stale target must not prevent unrelated QOL features
+                // from registering. The exact patch class and exception stay
+                // visible in LogOutput.log for version-specific follow-up.
+                Logger.LogError($"Harmony patch class '{type.FullName}' failed: {exception}");
+            }
+        }
+
+        Logger.LogInfo($"Harmony registered {patchedTypes} QOL patch classes.");
     }
 
     internal static void LogWarning(string message)
