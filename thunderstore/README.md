@@ -22,6 +22,10 @@ Install the package with r2modman/Thunderstore Mod Manager, or extract the conte
 
 For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting uses the server for the decision and clients for the vote popup, while equipment-in-water, running hotbar equipment, and the currency-pocket UI require the client copy.
 
+The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; use the small arrow on the pocket to move them back into normal inventory slots. The pocket is laid out after common expanded-inventory mods finish their UI layout.
+
+When updating, remove the old `SwmarlyValheimQOL.dll`/package copy first if your manager leaves duplicate plugin versions behind, then install the new package on both the server and all clients. Do not keep two copies of this mod in different plugin folders.
+
 Every feature is enabled by default.
 
 Do not install duplicate copies of the individual mods at the same time. Their overlapping patches can cancel each other out.
