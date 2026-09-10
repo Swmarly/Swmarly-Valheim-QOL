@@ -36,6 +36,10 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> FleeOnSight;
     internal static ConfigEntry<bool> NoRainDamage;
     internal static ConfigEntry<bool> NoStaminaCosts;
+    internal static ConfigEntry<bool> MultiUserChests;
+    internal static ConfigEntry<bool> SpeedyPaths;
+    internal static ConfigEntry<bool> NoStaminaOnPaths;
+    internal static ConfigEntry<bool> NoAfkRaids;
 
     internal static ConfigEntry<float> FloatForce;
     internal static ConfigEntry<float> FloatDamping;
@@ -50,6 +54,18 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<KeyboardShortcut> SurfaceKey;
     internal static ConfigEntry<string> FleeMobNames;
     internal static ConfigEntry<int> StaminaCostMode;
+    internal static ConfigEntry<float> PathSensorInterval;
+    internal static ConfigEntry<float> DirtPathSpeed;
+    internal static ConfigEntry<float> StonePathSpeed;
+    internal static ConfigEntry<float> WoodPathSpeed;
+    internal static ConfigEntry<float> StoneStructureSpeed;
+    internal static ConfigEntry<float> DirtPathStamina;
+    internal static ConfigEntry<float> StonePathStamina;
+    internal static ConfigEntry<float> StructurePathStamina;
+    internal static ConfigEntry<float> AfkMinutes;
+    internal static ConfigEntry<float> AfkMovementThreshold;
+    internal static ConfigEntry<float> AfkProtectionRadius;
+    internal static ConfigEntry<bool> BlockForcedRaids;
 
     internal static ConfigEntry<int> SleepPercent;
     internal static ConfigEntry<int> SleepPlayersNeeded;
@@ -120,6 +136,10 @@ public sealed class Plugin : BaseUnityPlugin
         FleeOnSight = Config.Bind("Features", "Trash mobs flee on sight", true, "Make configured low-tier mobs flee instead of attacking on sight.");
         NoRainDamage = Config.Bind("Features", "No rain damage", true, "Prevent uncovered structures from taking rain wear while preserving support wear.");
         NoStaminaCosts = Config.Bind("Features", "No stamina costs", true, "Remove stamina costs from building tools by default.");
+        MultiUserChests = Config.Bind("Features", "Allow multiple users in chests", true, "Remove the vanilla chest-in-use block so multiple players can open a chest together.");
+        SpeedyPaths = Config.Bind("Features", "Speedy paths", true, "Apply SpeedyPaths-style movement bonuses to paths and common building surfaces.");
+        NoStaminaOnPaths = Config.Bind("Features", "No stamina on paths", true, "Remove running stamina drain while standing on a dirt or stone path.");
+        NoAfkRaids = Config.Bind("Features", "No AFK raids", true, "Prevent random raids while all connected players have been stationary for the configured AFK period.");
 
         FloatForce = Config.Bind("Floating items", "Buoyancy force", 0.5f, new ConfigDescription("Native Floating force applied below the surface.", new AcceptableValueRange<float>(0.05f, 3f)));
         FloatDamping = Config.Bind("Floating items", "Damping", 0.05f, new ConfigDescription("Velocity damping while an item is floating.", new AcceptableValueRange<float>(0f, 0.5f)));
@@ -136,6 +156,18 @@ public sealed class Plugin : BaseUnityPlugin
         SitHealPerSecond = Config.Bind("Sitting regeneration", "Health per second", 1f, new ConfigDescription("Health restored per second while sitting.", new AcceptableValueRange<float>(0f, 20f)));
         FleeMobNames = Config.Bind("Flee on sight", "Mob name fragments", "Greyling,Neck,Greydwarf", "Comma-separated prefab/name fragments that should flee on sight.");
         StaminaCostMode = Config.Bind("No stamina costs", "Mode", 1, new ConfigDescription("0 = disabled, 1 = hammer/hoe/cultivator, 2 = all stamina actions.", new AcceptableValueRange<int>(0, 2)));
+        PathSensorInterval = Config.Bind("Speedy paths", "Ground sensor interval", 0.25f, new ConfigDescription("Seconds between ground-material checks for the local player.", new AcceptableValueRange<float>(0.05f, 2f)));
+        DirtPathSpeed = Config.Bind("Speedy paths", "Dirt path speed", 1.15f, new ConfigDescription("Movement multiplier on dirt paths.", new AcceptableValueRange<float>(0.1f, 3f)));
+        StonePathSpeed = Config.Bind("Speedy paths", "Stone path speed", 1.4f, new ConfigDescription("Movement multiplier on stone paths.", new AcceptableValueRange<float>(0.1f, 3f)));
+        WoodPathSpeed = Config.Bind("Speedy paths", "Wood structure speed", 1.15f, new ConfigDescription("Movement multiplier on wood structures.", new AcceptableValueRange<float>(0.1f, 3f)));
+        StoneStructureSpeed = Config.Bind("Speedy paths", "Stone structure speed", 1.4f, new ConfigDescription("Movement multiplier on stone/iron/marble structures.", new AcceptableValueRange<float>(0.1f, 3f)));
+        DirtPathStamina = Config.Bind("Speedy paths", "Dirt path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on dirt paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        StonePathStamina = Config.Bind("Speedy paths", "Stone path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on stone paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        StructurePathStamina = Config.Bind("Speedy paths", "Structure stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on supported structures. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        AfkMinutes = Config.Bind("No AFK raids", "AFK minutes", 10f, new ConfigDescription("Minutes without meaningful movement before a player is treated as AFK.", new AcceptableValueRange<float>(0.1f, 240f)));
+        AfkMovementThreshold = Config.Bind("No AFK raids", "Movement threshold", 0.1f, new ConfigDescription("Minimum movement in metres that resets AFK detection.", new AcceptableValueRange<float>(0.01f, 5f)));
+        AfkProtectionRadius = Config.Bind("No AFK raids", "Protection radius", 200f, new ConfigDescription("Radius used when locating a player near a random event. Set to 0 to protect the whole world.", new AcceptableValueRange<float>(0f, 1000f)));
+        BlockForcedRaids = Config.Bind("No AFK raids", "Block forced raids", false, "Also block explicitly forced random events while players are AFK.");
 
         SleepPercent = Config.Bind("Sleep skip", "Required yes percentage", 50, new ConfigDescription("Percentage of active players required to skip the night.", new AcceptableValueRange<int>(1, 100)));
         SleepPlayersNeeded = Config.Bind("Sleep skip", "Players in bed to start vote", 2, new ConfigDescription("Minimum number of players in bed before a vote starts. Solo play bypasses this.", new AcceptableValueRange<int>(1, 100)));
@@ -501,22 +533,26 @@ internal static class FloatingItemsStartPatch
 [HarmonyPatch(typeof(Player), "CheckRun")]
 internal static class EquipWhileRunningPatch
 {
+    [ThreadStatic]
+    internal static int HotbarTransactionDepth;
+
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
         List<CodeInstruction> code = instructions.ToList();
-        MethodInfo isRunning = AccessTools.Method(typeof(Character), nameof(Character.IsRunning));
         int removedChecks = 0;
 
         for (int i = 1; i < code.Count; ++i)
         {
-            if (code[i].opcode != System.Reflection.Emit.OpCodes.Callvirt || code[i].operand is not MethodInfo called ||
-                called.Name != nameof(Character.IsRunning) || (isRunning != null && called.ReturnType != isRunning.ReturnType)) continue;
+            if (code[i].opcode != System.Reflection.Emit.OpCodes.Call && code[i].opcode != System.Reflection.Emit.OpCodes.Callvirt ||
+                code[i].operand is not MethodInfo called || called.DeclaringType != typeof(Character) ||
+                called.Name != nameof(Character.IsRunning) || called.ReturnType != typeof(bool)) continue;
 
             // EquipGearWhileRunning uses this same call-site patch. The run
             // check in CheckRun is the gate that makes Player.UseHotbarItem
             // flash/select and then immediately refuse the equip transaction.
-            // Removing only the call and its preceding receiver leaves the
-            // rest of Valheim's run calculation intact.
+            // Current Valheim builds can emit either call or callvirt here.
+            // Removing the receiver and query leaves the rest of CheckRun's
+            // stamina/sprint calculation intact.
             code[i - 1].opcode = System.Reflection.Emit.OpCodes.Nop;
             code[i].opcode = System.Reflection.Emit.OpCodes.Nop;
             removedChecks++;
@@ -525,6 +561,39 @@ internal static class EquipWhileRunningPatch
         if (removedChecks == 0)
             Plugin.LogWarning("Equip hotbar items while running: Player.CheckRun did not contain the expected Character.IsRunning call.");
         return code;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "UseHotbarItem")]
+internal static class EquipWhileRunningHotbarPatch
+{
+    private static void Prefix(Player __instance)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
+            EquipWhileRunningPatch.HotbarTransactionDepth++;
+    }
+
+    private static void Finalizer()
+    {
+        if (EquipWhileRunningPatch.HotbarTransactionDepth > 0) EquipWhileRunningPatch.HotbarTransactionDepth--;
+    }
+}
+
+[HarmonyPatch(typeof(Character), nameof(Character.IsRunning))]
+internal static class EquipWhileRunningQueryPatch
+{
+    private static bool Prefix(Character __instance, ref bool __result)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && __instance == Player.m_localPlayer &&
+            EquipWhileRunningPatch.HotbarTransactionDepth > 0)
+        {
+            // UseHotbarItem is the authoritative transaction boundary. This
+            // catches the running query even if a future Valheim build moves
+            // the gate out of CheckRun or changes its IL call opcode.
+            __result = false;
+            return false;
+        }
+        return true;
     }
 }
 
@@ -571,6 +640,299 @@ internal static class NoStaminaCostsPatch
         string rightName = right?.m_shared?.m_name ?? string.Empty;
         string leftName = left?.m_shared?.m_name ?? string.Empty;
         if (rightName is "$item_hammer" or "$item_hoe" or "$item_cultivator" || leftName is "$item_hammer" or "$item_hoe" or "$item_cultivator") v = 0f;
+    }
+}
+
+internal enum QolGroundType
+{
+    Untamed,
+    DirtPath,
+    StonePath,
+    Cultivated,
+    WoodStructure,
+    StoneStructure
+}
+
+internal static class SpeedyPathsState
+{
+    private static readonly FieldInfo PaintMaskField = AccessTools.Field(typeof(Heightmap), "m_paintMask");
+    private static readonly FieldInfo LastGroundPointField = AccessTools.Field(typeof(Character), "m_lastGroundPoint");
+    private static readonly MethodInfo WorldToVertexMethod = AccessTools.Method(typeof(Heightmap), "WorldToVertex");
+    private static readonly object[] WorldToVertexArgs = { Vector3.zero, 0, 0 };
+    private static readonly int PieceLayer = LayerMask.NameToLayer("piece");
+
+    private static float sensorTimer;
+    private static QolGroundType cachedGroundType;
+    internal static float ActiveSpeedMultiplier { get; private set; } = 1f;
+    internal static float ActiveStaminaMultiplier { get; private set; } = 1f;
+
+    internal static void Update(Player player)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) || !Plugin.IsLocalPlayer(player) || player.IsDead())
+        {
+            ActiveSpeedMultiplier = 1f;
+            ActiveStaminaMultiplier = 1f;
+            return;
+        }
+
+        sensorTimer -= Time.fixedDeltaTime;
+        if (sensorTimer <= 0f)
+        {
+            sensorTimer = Mathf.Max(0.05f, Plugin.PathSensorInterval.Value);
+            cachedGroundType = DetectGround(player);
+        }
+
+        if (player.IsSwimming() || player.InInterior())
+        {
+            ActiveSpeedMultiplier = 1f;
+            ActiveStaminaMultiplier = 1f;
+            return;
+        }
+
+        ActiveSpeedMultiplier = GetSpeedMultiplier(cachedGroundType);
+        ActiveStaminaMultiplier = GetStaminaMultiplier(cachedGroundType);
+    }
+
+    private static float GetSpeedMultiplier(QolGroundType ground)
+    {
+        return ground switch
+        {
+            QolGroundType.DirtPath => Mathf.Max(0.1f, Plugin.DirtPathSpeed.Value),
+            QolGroundType.StonePath => Mathf.Max(0.1f, Plugin.StonePathSpeed.Value),
+            QolGroundType.WoodStructure => Mathf.Max(0.1f, Plugin.WoodPathSpeed.Value),
+            QolGroundType.StoneStructure => Mathf.Max(0.1f, Plugin.StoneStructureSpeed.Value),
+            _ => 1f
+        };
+    }
+
+    private static float GetStaminaMultiplier(QolGroundType ground)
+    {
+        if (ground is QolGroundType.DirtPath or QolGroundType.StonePath)
+            return Plugin.IsFeatureEnabled(Plugin.NoStaminaOnPaths) ? 0f :
+                (ground == QolGroundType.DirtPath ? Mathf.Max(0f, Plugin.DirtPathStamina.Value) : Mathf.Max(0f, Plugin.StonePathStamina.Value));
+        if (ground is QolGroundType.WoodStructure or QolGroundType.StoneStructure)
+            return Mathf.Max(0f, Plugin.StructurePathStamina.Value);
+        return 1f;
+    }
+
+    private static QolGroundType DetectGround(Player player)
+    {
+        try
+        {
+            Collider ground = player.GetLastGroundCollider();
+            if (ground == null) return QolGroundType.Untamed;
+
+            if (ground.gameObject.layer == PieceLayer)
+            {
+                WearNTear wear = ground.GetComponentInParent<WearNTear>();
+                if (wear != null)
+                {
+                    return wear.m_materialType switch
+                    {
+                        WearNTear.MaterialType.Wood or WearNTear.MaterialType.HardWood => QolGroundType.WoodStructure,
+                        WearNTear.MaterialType.Stone or WearNTear.MaterialType.Iron or WearNTear.MaterialType.Marble or WearNTear.MaterialType.Ashstone => QolGroundType.StoneStructure,
+                        _ => QolGroundType.Untamed
+                    };
+                }
+            }
+
+            Heightmap heightmap = ground.GetComponent<Heightmap>();
+            Texture2D paintMask = PaintMaskField?.GetValue(heightmap) as Texture2D;
+            Vector3? lastPoint = LastGroundPointField?.GetValue(player) as Vector3?;
+            if (heightmap == null || paintMask == null || !paintMask.isReadable || WorldToVertexMethod == null || !lastPoint.HasValue)
+                return QolGroundType.Untamed;
+
+            WorldToVertexArgs[0] = lastPoint.Value;
+            WorldToVertexArgs[1] = 0;
+            WorldToVertexArgs[2] = 0;
+            WorldToVertexMethod.Invoke(heightmap, WorldToVertexArgs);
+            int centerX = Convert.ToInt32(WorldToVertexArgs[1]);
+            int centerY = Convert.ToInt32(WorldToVertexArgs[2]);
+            int radius = 1;
+            int minX = Mathf.Clamp(centerX - radius, 0, paintMask.width - 1);
+            int minY = Mathf.Clamp(centerY - radius, 0, paintMask.height - 1);
+            int width = Mathf.Min(radius * 2 + 1, paintMask.width - minX);
+            int height = Mathf.Min(radius * 2 + 1, paintMask.height - minY);
+            if (width <= 0 || height <= 0) return QolGroundType.Untamed;
+
+            Color average = Color.black;
+            Color[] samples = paintMask.GetPixels(minX, minY, width, height, 0);
+            foreach (Color sample in samples) average += sample;
+            average /= Mathf.Max(1, samples.Length);
+            if (average.b > 0.4f) return QolGroundType.StonePath;
+            if (average.r > 0.4f) return QolGroundType.DirtPath;
+            if (average.g > 0.4f) return QolGroundType.Cultivated;
+        }
+        catch (Exception exception)
+        {
+            Plugin.LogWarning($"Speedy paths ground detection failed once: {exception.Message}");
+        }
+        return QolGroundType.Untamed;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "FixedUpdate")]
+internal static class SpeedyPathsUpdatePatch
+{
+    private static void Prefix(Player __instance)
+    {
+        SpeedyPathsState.Update(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Player), "CheckRun")]
+internal static class SpeedyPathsStaminaPatch
+{
+    private static void Prefix(Player __instance, out float __state)
+    {
+        __state = __instance.m_runStaminaDrain;
+        if (Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) && Plugin.IsLocalPlayer(__instance))
+            __instance.m_runStaminaDrain *= SpeedyPathsState.ActiveStaminaMultiplier;
+    }
+
+    private static void Postfix(Player __instance, float __state)
+    {
+        __instance.m_runStaminaDrain = __state;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "GetJogSpeedFactor")]
+internal static class SpeedyPathsJogPatch
+{
+    private static void Postfix(Player __instance, ref float __result)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) && Plugin.IsLocalPlayer(__instance))
+            __result *= SpeedyPathsState.ActiveSpeedMultiplier;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "GetRunSpeedFactor")]
+internal static class SpeedyPathsRunPatch
+{
+    private static void Postfix(Player __instance, ref float __result)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) && Plugin.IsLocalPlayer(__instance))
+            __result *= SpeedyPathsState.ActiveSpeedMultiplier;
+    }
+}
+
+[HarmonyPatch(typeof(Container), "RPC_RequestOpen")]
+internal static class MultiUserChestOpenPatch
+{
+    private static bool Prefix(Container __instance, long uid, long playerID)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests) || __instance == null || __instance.m_nview == null ||
+            !__instance.m_nview.IsOwner()) return true;
+        if (!__instance.CheckAccess(playerID))
+        {
+            __instance.m_nview.InvokeRPC(uid, "OpenRespons", false);
+            return false;
+        }
+        if (__instance.IsInUse() && playerID != ZNet.GetUID())
+        {
+            // Same behavior as No-Chest-Block/MultiUserChest: acknowledge the
+            // second open without transferring the container's network owner.
+            __instance.m_nview.InvokeRPC(uid, "OpenRespons", true);
+            return false;
+        }
+        return true;
+    }
+}
+
+[HarmonyPatch(typeof(Container), "RPC_RequestStack")]
+internal static class MultiUserChestStackPatch
+{
+    private static bool Prefix(Container __instance, long uid, long playerID)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests) || __instance == null || __instance.m_nview == null ||
+            !__instance.m_nview.IsOwner()) return true;
+        if (!__instance.CheckAccess(playerID))
+        {
+            __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", false);
+            return false;
+        }
+        if (__instance.IsInUse() && playerID != ZNet.GetUID())
+        {
+            __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", true);
+            return false;
+        }
+        return true;
+    }
+}
+
+internal static class NoAfkRaidsState
+{
+    private readonly struct Activity
+    {
+        internal readonly Vector3 Position;
+        internal readonly DateTime LastActivity;
+
+        internal Activity(Vector3 position, DateTime lastActivity)
+        {
+            Position = position;
+            LastActivity = lastActivity;
+        }
+    }
+
+    private static readonly Dictionary<long, Activity> Players = new();
+
+    internal static bool ShouldBlock(object[] args)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.NoAfkRaids) || ZNet.instance == null || !ZNet.instance.IsServer()) return false;
+
+        bool forced = args != null && args.Any(argument => argument is bool value && value);
+        if (forced && !Plugin.IsFeatureEnabled(Plugin.BlockForcedRaids)) return false;
+
+        List<ZDO> characters;
+        try
+        {
+            characters = ZNet.instance.GetAllCharacterZDOS();
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (characters == null || characters.Count == 0) return false;
+        DateTime now = DateTime.UtcNow;
+        int connectedPlayers = 0;
+        int afkPlayers = 0;
+        HashSet<long> seen = new();
+
+        foreach (ZDO zdo in characters)
+        {
+            if (zdo == null || zdo.m_uid.UserID == 0) continue;
+            long userId = zdo.m_uid.UserID;
+            seen.Add(userId);
+            connectedPlayers++;
+            Vector3 position = zdo.m_position;
+            if (!Players.TryGetValue(userId, out Activity previous) ||
+                Vector3.Distance(previous.Position, position) >= Mathf.Max(0.01f, Plugin.AfkMovementThreshold.Value))
+            {
+                Players[userId] = new Activity(position, now);
+                continue;
+            }
+
+            if ((now - previous.LastActivity).TotalMinutes >= Mathf.Max(0.1f, Plugin.AfkMinutes.Value)) afkPlayers++;
+        }
+
+        foreach (long userId in Players.Keys.ToArray())
+            if (!seen.Contains(userId)) Players.Remove(userId);
+
+        // The reference NoAFKRaids implementation protects an event when the
+        // players around it are AFK. The server has authoritative character
+        // positions, so this server-side position tracker works on a
+        // dedicated server without relying on a client-only input loop.
+        return connectedPlayers > 0 && afkPlayers >= connectedPlayers;
+    }
+}
+
+[HarmonyPatch(typeof(RandEventSystem), "SetRandomEvent")]
+internal static class NoAfkRaidsPatch
+{
+    private static bool Prefix(object[] __args)
+    {
+        return !NoAfkRaidsState.ShouldBlock(__args);
     }
 }
 
@@ -684,14 +1046,22 @@ internal static class SitRegenerationFixedPatch
 [HarmonyPatch(typeof(Character), "CustomFixedUpdate")]
 internal static class DivingPatch
 {
-    private static bool IsDivePressed()
+    internal static bool DiveToggle;
+    private static bool DiveButtonWasHeld;
+
+    private static bool IsDiveHeld()
     {
-        return Plugin.DiveKey.Value.IsPressed() || ZInput.GetButton("Crouch") || ZInput.GetButton("JoyCrouch");
+        return Plugin.DiveKey.Value.IsPressed();
     }
 
-    private static bool IsSurfacePressed()
+    private static bool IsSurfaceHeld()
     {
         return Plugin.SurfaceKey.Value.IsPressed() || ZInput.GetButton("Jump") || ZInput.GetButton("JoyJump");
+    }
+
+    private static bool IsForwardHeld()
+    {
+        return ZInput.GetButton("Forward") || ZInput.GetButton("JoyLStickUp");
     }
 
     internal static bool IsLocalWaterPlayer(Character character)
@@ -702,68 +1072,71 @@ internal static class DivingPatch
 
     internal static bool HasDiveTarget(Player player)
     {
-        return player != null && player.m_swimDepth > 1.61f;
+        return player != null && player.m_swimDepth > 2.5f;
     }
 
     internal static bool ShouldKeepNativeSwimming(Player player)
     {
-        return IsLocalWaterPlayer(player) && (HasDiveTarget(player) || IsDivePressed() || IsSurfacePressed());
+        return IsLocalWaterPlayer(player) && (HasDiveTarget(player) || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
     }
 
-    private static void UpdateDepthTarget(Player player, float dt)
-    {
-        bool diving = IsDivePressed();
-        bool surfacing = IsSurfacePressed();
-        if (diving == surfacing) return;
-
-        // BetterDiving and Valheim's own swimming controller use m_swimDepth
-        // as the authoritative vertical target. Velocity alone is overwritten
-        // by UpdateSwimming on the next physics step.
-        float direction = diving ? 1f : -1f;
-        float rate = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
-        player.m_swimDepth = Mathf.Clamp(player.m_swimDepth + direction * rate * Mathf.Max(dt, Time.fixedDeltaTime), 1.6f, 20f);
-    }
-
-    private static void Prefix(Character __instance, float dt, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    private static void Prefix(Character __instance, float dt, ref Vector3 ___m_moveDir, ref Vector3 ___m_lookDir,
+        ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
+
         if (!player.InWater() || player.IsOnGround() || player.IsDead())
         {
+            DiveToggle = false;
+            DiveButtonWasHeld = false;
             player.m_swimDepth = 1.6f;
             return;
         }
 
-        UpdateDepthTarget(player, dt);
+        // BetterDiving toggles a persistent dive state on the crouch edge. The
+        // configured Dive key remains a hold-to-dive shortcut for players who
+        // do not want a toggle. Do not use Rigidbody velocity: native Valheim
+        // swimming consumes m_swimDepth and overwrites velocity every tick.
+        bool crouchHeld = ZInput.GetButton("Crouch") || ZInput.GetButton("JoyCrouch");
+        bool crouchPressed = (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch")) && !DiveButtonWasHeld;
+        DiveButtonWasHeld = crouchHeld;
+        if (crouchPressed) DiveToggle = !DiveToggle;
 
-        // These are the two native timers that otherwise make Valheim leave
-        // the swimming state during a deep dive, causing an immediate bounce
-        // back to the surface. Keep native swimming alive for the whole depth
-        // target, including frames where the dive key is released.
+        float fixedDelta = Mathf.Max(dt, Time.fixedDeltaTime);
+        float depth = player.m_swimDepth;
+        float speed = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
+        bool directDive = IsDiveHeld();
+        bool surface = IsSurfaceHeld();
+
+        if (directDive && !surface)
+        {
+            depth += speed * fixedDelta;
+        }
+        else if (surface && !directDive)
+        {
+            depth -= speed * fixedDelta;
+        }
+        else if (DiveToggle && IsForwardHeld())
+        {
+            // This is the reference mod's look-direction behaviour, with a
+            // configured rate so it remains usable with mouse and controller.
+            if (___m_lookDir.y < -0.15f) depth += speed * fixedDelta;
+            else if (___m_lookDir.y > 0.15f) depth -= speed * fixedDelta;
+        }
+
+        player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
+        if (player.m_swimDepth > 2.5f && DiveToggle && IsForwardHeld()) player.SetMoveDir(___m_lookDir);
+
+        // BetterDiving keeps both native timers alive while the target is
+        // below the surface. This is what prevents the native controller from
+        // deciding that the player surfaced and applying the bounce impulse.
         if (ShouldKeepNativeSwimming(player))
         {
             ___m_lastGroundTouch = 0.3f;
             ___m_swimTimer = 0f;
         }
-    }
 
-    private static void Postfix(Character __instance, float dt)
-    {
-        if (__instance is not Player player || !ShouldKeepNativeSwimming(player)) return;
-
-        bool diving = IsDivePressed();
-        bool surfacing = IsSurfacePressed();
-        if (diving == surfacing) return;
-
-        Rigidbody body = __instance.GetComponent<Rigidbody>();
-        if (body == null) return;
-
-        float direction = diving ? -1f : 1f;
-        float speed = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
-        float fixedDelta = Mathf.Max(Mathf.Max(dt, Time.fixedDeltaTime), 0.001f);
-        Vector3 velocity = body.velocity;
-        velocity.y = Mathf.MoveTowards(velocity.y, direction * speed, speed * 8f * fixedDelta);
-        body.velocity = velocity;
-        if (Plugin.DiveStaminaPerSecond.Value > 0f)
+        if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || (DiveToggle && IsForwardHeld())))
             player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
     }
 }
@@ -797,30 +1170,34 @@ internal static class DivingMotionPatch
 internal static class DivingCameraPatch
 {
     private static readonly Dictionary<int, float> OriginalWaterDistance = new();
+    private static readonly Dictionary<int, float> OriginalMaxDistance = new();
 
-    private static void Prefix(GameCamera __instance, Camera ___m_camera)
+    private static void Postfix(GameCamera __instance, Camera ___m_camera)
     {
         Player player = Player.m_localPlayer;
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || player == null || ___m_camera == null) return;
 
         int id = __instance.GetInstanceID();
         if (!OriginalWaterDistance.ContainsKey(id)) OriginalWaterDistance[id] = __instance.m_minWaterDistance;
+        if (!OriginalMaxDistance.ContainsKey(id)) OriginalMaxDistance[id] = __instance.m_maxDistance;
 
         bool targetUnderwater = DivingPatch.IsLocalWaterPlayer(player) && DivingPatch.HasDiveTarget(player);
-        bool cameraUnderwater = false;
-        if (DivingPatch.IsLocalWaterPlayer(player))
-        {
-            float surface = player.GetLiquidLevel();
-            cameraUnderwater = ___m_camera.transform.position.y < surface && player.IsSwimming();
-        }
+        bool cameraUnderwater = DivingPatch.IsLocalWaterPlayer(player) &&
+                                ___m_camera.transform.position.y < player.GetLiquidLevel() - 0.05f;
 
-        // GameCamera's normal minimum-water-distance clamp keeps the camera
-        // above the surface even when the player has a deep swim target. The
-        // reference diving implementation removes that clamp while below
-        // water and restores the original value after surfacing.
-        __instance.m_minWaterDistance = targetUnderwater || cameraUnderwater
-            ? -5000f
-            : OriginalWaterDistance[id];
+        // The reference camera patch does this after the game's own camera
+        // update. A prefix is overwritten by some 1.0 camera paths, which is
+        // why the old implementation still left the camera above the player.
+        if (targetUnderwater || cameraUnderwater)
+        {
+            __instance.m_minWaterDistance = -5000f;
+            __instance.m_maxDistance = Mathf.Min(3f, OriginalMaxDistance[id]);
+        }
+        else
+        {
+            __instance.m_minWaterDistance = OriginalWaterDistance[id];
+            __instance.m_maxDistance = OriginalMaxDistance[id];
+        }
     }
 }
 
