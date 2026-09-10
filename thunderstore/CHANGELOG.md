@@ -2,6 +2,12 @@
 
 ## 1.0.3
 
+- Added No-Chest-Block/MultiUserChest-style simultaneous chest opening and stack acknowledgment.
+- Added SpeedyPaths-style ground detection, movement multipliers, and configurable no-stamina dirt/stone paths.
+- Added dedicated-server NoAFKRaids protection based on authoritative player movement positions.
+- Replaced the running-equipment patch with a transaction-scoped `UseHotbarItem`/`Character.IsRunning` bypass and support for both `call` and `callvirt` Valheim IL.
+- Replaced Rigidbody diving with native `m_swimDepth` control, persistent dive state, native timer maintenance, and a post-camera water-clamp override.
+
 - Replaced the running-equipment workaround with the same `Player.CheckRun` transpiler used by EquipGearWhileRunning, which removes the actual hotbar equip gate while preserving sprint movement.
 - Replaced the inverted swim-timer workaround with a call-site `IsSwimming` override for equipment updates, matching Use Equipment in Water and avoiding movement-state changes.
 - Kept Valheim's native dive target active through `UpdateMotion`/`CustomFixedUpdate` and removed GameCamera's minimum-water-distance clamp while the local player is below the surface, preventing camera snapping and buoyancy bounce-back.
