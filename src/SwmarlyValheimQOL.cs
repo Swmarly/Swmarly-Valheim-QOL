@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -165,11 +166,18 @@ public sealed class Plugin : BaseUnityPlugin
         CultivatedSpeed = Config.Bind("Speedy paths", "Cultivated ground speed", 1f, new ConfigDescription("Movement multiplier on cultivated ground.", new AcceptableValueRange<float>(0.1f, 3f)));
         WoodPathSpeed = Config.Bind("Speedy paths", "Wood structure speed", 1.15f, new ConfigDescription("Movement multiplier on wood structures.", new AcceptableValueRange<float>(0.1f, 3f)));
         StoneStructureSpeed = Config.Bind("Speedy paths", "Stone structure speed", 1.4f, new ConfigDescription("Movement multiplier on stone/iron/marble structures.", new AcceptableValueRange<float>(0.1f, 3f)));
-        DirtPathStamina = Config.Bind("Speedy paths", "Dirt path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on dirt paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
-        StonePathStamina = Config.Bind("Speedy paths", "Stone path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on stone paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        // These are the SpeedyPaths defaults. The separate NoStaminaOnPaths
+        // feature overrides them to zero when enabled; retaining the native
+        // reference values here makes disabling that toggle actually restore
+        // normal path stamina instead of leaving it free forever.
+        DirtPathStamina = Config.Bind("Speedy paths", "Dirt path stamina multiplier", 0.8f, new ConfigDescription("Running stamina multiplier on dirt paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        StonePathStamina = Config.Bind("Speedy paths", "Stone path stamina multiplier", 0.7f, new ConfigDescription("Running stamina multiplier on stone paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
         CultivatedStamina = Config.Bind("Speedy paths", "Cultivated ground stamina multiplier", 1f, new ConfigDescription("Running stamina multiplier on cultivated ground.", new AcceptableValueRange<float>(0f, 2f)));
-        StructurePathStamina = Config.Bind("Speedy paths", "Structure stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on supported structures. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
-        AfkMinutes = Config.Bind("No AFK raids", "AFK minutes", 10f, new ConfigDescription("Minutes without meaningful movement before a player is treated as AFK.", new AcceptableValueRange<float>(0.1f, 240f)));
+        StructurePathStamina = Config.Bind("Speedy paths", "Structure stamina multiplier", 0.8f, new ConfigDescription("Running stamina multiplier on supported structures. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        // NoAFKRaids' current reference default is three minutes. Keep that
+        // behavior instead of making a newly-created config silently wait ten
+        // minutes before protecting an idle player.
+        AfkMinutes = Config.Bind("No AFK raids", "AFK minutes", 3f, new ConfigDescription("Minutes without meaningful movement before a player is treated as AFK.", new AcceptableValueRange<float>(0.1f, 240f)));
         AfkMovementThreshold = Config.Bind("No AFK raids", "Movement threshold", 0.1f, new ConfigDescription("Minimum movement in metres that resets AFK detection.", new AcceptableValueRange<float>(0.01f, 5f)));
         AfkProtectionRadius = Config.Bind("No AFK raids", "Protection radius", 200f, new ConfigDescription("Radius used when locating a player near a random event. Set to 0 to protect the whole world.", new AcceptableValueRange<float>(0f, 1000f)));
         BlockForcedRaids = Config.Bind("No AFK raids", "Block forced raids", false, "Also block explicitly forced random events while players are AFK.");
@@ -258,8 +266,11 @@ public sealed class Plugin : BaseUnityPlugin
             player.Message(MessageHud.MessageType.Center, "$inventory_full");
             return;
         }
-        player.GetInventory().AddItem(prefab, coins);
-        SetPocketCoins(player, 0);
+        Inventory inventory = player.GetInventory();
+        int before = inventory.CountItems(CoinToken);
+        inventory.AddItem(prefab, coins);
+        int added = Mathf.Max(0, inventory.CountItems(CoinToken) - before);
+        if (added > 0) SetPocketCoins(player, Mathf.Max(0, coins - added));
     }
 
     internal static void DepositInventoryCoins()
@@ -270,8 +281,10 @@ public sealed class Plugin : BaseUnityPlugin
         int coins = inventory.CountItems(CoinToken);
         if (coins <= 0) return;
 
+        int before = inventory.CountItems(CoinToken);
         inventory.RemoveItem(CoinToken, coins);
-        SetPocketCoins(player, GetPocketCoins(player) + coins);
+        int deposited = Mathf.Max(0, before - inventory.CountItems(CoinToken));
+        if (deposited > 0) SetPocketCoins(player, GetPocketCoins(player) + deposited);
     }
 
     internal static bool DepositDraggedCoins()
@@ -283,8 +296,11 @@ public sealed class Plugin : BaseUnityPlugin
 
         int amount = Mathf.Min(gui.m_dragAmount, gui.m_dragItem.m_stack);
         if (amount <= 0) return false;
+        int before = gui.m_dragItem.m_stack;
         gui.m_dragInventory.RemoveItem(gui.m_dragItem, amount);
-        SetPocketCoins(player, GetPocketCoins(player) + amount);
+        int removed = Mathf.Clamp(before - gui.m_dragItem.m_stack, 0, amount);
+        if (removed <= 0) return false;
+        SetPocketCoins(player, GetPocketCoins(player) + removed);
         gui.SetupDragItem(null, null, 1);
         return true;
     }
@@ -301,9 +317,14 @@ public sealed class Plugin : BaseUnityPlugin
         // combined mod could also leave two cloned panels behind. Adopt one
         // panel and remove every duplicate before doing any layout work.
         GameObject existing = null;
-        for (int i = inventoryRoot.childCount - 1; i >= 0; --i)
+        // Repositioning may intentionally reparent the clone next to Armor
+        // inside an inventory-layout mod's canvas. Walk the whole player UI
+        // hierarchy so old nested copies are adopted/removed too.
+        Transform[] descendants = inventoryRoot.GetComponentsInChildren<Transform>(true);
+        for (int i = descendants.Length - 1; i >= 0; --i)
         {
-            Transform child = inventoryRoot.GetChild(i);
+            Transform child = descendants[i];
+            if (child == inventoryRoot) continue;
             if (child.name == PocketUiName)
             {
                 if (existing == null) existing = child.gameObject;
@@ -318,7 +339,7 @@ public sealed class Plugin : BaseUnityPlugin
             }
         }
 
-        if (PocketUi == null || PocketUi.transform.parent != inventoryRoot || !PocketUi)
+        if (PocketUi == null || !PocketUi || !PocketUi.transform.IsChildOf(inventoryRoot))
             PocketUi = existing;
         if (PocketUi == null)
         {
@@ -336,6 +357,10 @@ public sealed class Plugin : BaseUnityPlugin
 
         EnsurePocketButtons(gui);
         RepositionPocketUi(inventoryRoot, armor, weight);
+        Graphic pocketGraphic = PocketUi.GetComponent<Graphic>();
+        if (pocketGraphic != null) pocketGraphic.raycastTarget = true;
+        CanvasGroup pocketCanvas = PocketUi.GetComponent<CanvasGroup>();
+        if (pocketCanvas != null) pocketCanvas.blocksRaycasts = true;
         SetPocketIcon();
     }
 
@@ -482,8 +507,14 @@ public sealed class Plugin : BaseUnityPlugin
         // their anchored coordinates directly, matching CurrencyPocket. The
         // previous world-space conversion applied the parent's anchor offset
         // a second time and moved the pocket into the middle of the screen.
-        if (pocketRect.parent != armorRect.parent)
-            pocketRect.SetParent(armorRect.parent, false);
+        // The stock inventory keeps Armor and Weight directly under the
+        // player's inventory root. Use that same parent and the same
+        // anchored coordinate space. Reparenting through a screen-space
+        // canvas (the old workaround) is what put the card in the middle of
+        // the screen with expanded-inventory layouts.
+        Transform layoutParent = armorRect.parent == inventoryRoot ? inventoryRoot : armorRect.parent;
+        if (layoutParent != null && pocketRect.parent != layoutParent)
+            pocketRect.SetParent(layoutParent, false);
 
         pocketRect.anchorMin = armorRect.anchorMin;
         pocketRect.anchorMax = armorRect.anchorMax;
@@ -533,9 +564,16 @@ internal static class FloatingItemsPatch
     {
         if (!Plugin.IsFeatureEnabled(Plugin.FloatItems) || itemDrop == null) return;
         GameObject go = itemDrop.gameObject;
-        if (go.GetComponent<Rigidbody>() == null && go.GetComponentInChildren<Rigidbody>() == null) return;
+        Rigidbody body = go.GetComponent<Rigidbody>() ?? go.GetComponentInChildren<Rigidbody>();
+        if (body == null) return;
         if (go.GetComponent<ZNetView>() == null && go.GetComponentInChildren<ZNetView>() == null) return;
-        Floating floating = go.GetComponent<Floating>() ?? go.AddComponent<Floating>();
+
+        // Floating reads the Rigidbody from its own GameObject. Most drops
+        // keep both components on the root, but a few network prefabs place
+        // the Rigidbody on a child; attaching Floating to the root silently
+        // does nothing for those items.
+        GameObject host = body.gameObject;
+        Floating floating = host.GetComponent<Floating>() ?? host.AddComponent<Floating>();
         floating.m_force = Plugin.FloatForce.Value;
         floating.m_damping = Plugin.FloatDamping.Value;
     }
@@ -567,7 +605,7 @@ internal static class EquipWhileRunningPatch
                 continue;
 
             MethodInfo called = code[i].operand as MethodInfo;
-            if (called == null || called.Name != "ClearActionQueue" || called.ReturnType != typeof(void)) continue;
+            if (called == null || called.Name != "ClearActionQueue") continue;
 
             // Valheim 1.0 queues weapons/tools whose equip duration is not
             // instant. Player.CheckRun clears that queue whenever sprinting,
@@ -585,43 +623,74 @@ internal static class EquipWhileRunningPatch
     }
 }
 
-[HarmonyPatch(typeof(Character), "IsSwimming")]
-internal static class EquipmentInWaterPatch
+// Keep a runtime fallback alongside the reference transpiler above. Some
+// Valheim 1.0 builds emit CheckRun's call as a base-class call that Harmony's
+// IL matcher can see only after another transpiler has run. In that case the
+// original EquipGearWhileRunning transpiler is never enough; this prefix is
+// on the actual queue-clearing method and prevents the same cancellation.
+[HarmonyPatch(typeof(Humanoid), "ClearActionQueue")]
+internal static class EquipWhileRunningClearQueuePatch
 {
-    private static bool Prefix(Character __instance, ref bool __result, float ___m_swimTimer)
+    private static bool Prefix(Humanoid __instance)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) || __instance is not Player || ___m_swimTimer >= 0.5f) return true;
-
-        // This is the call-site technique used by Use Equipment in Water. It
-        // changes only the IsSwimming result consumed by equip/update code,
-        // leaving movement, stamina, drowning and animation state untouched.
-        StackTrace trace = new();
-        for (int i = 2; i < trace.FrameCount && i < 12; ++i)
-        {
-            string method = trace.GetFrame(i).GetMethod()?.Name;
-            if (method is "EquipItem" or "UpdateEquipment")
-            {
-                __result = false;
-                return false;
-            }
-        }
-        return true;
+        return !Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player;
     }
 }
 
-// Use Equipment in Water installs empty patches for these methods as a
-// compatibility shim. It lets Harmony compose the IsSwimming call-site hook
-// with equipment mods that otherwise replace the same method body.
 [HarmonyPatch(typeof(Humanoid), "EquipItem")]
-internal static class EquipmentInWaterEquipCompatibilityPatch
+internal static class EquipmentInWaterEquipPatch
 {
-    private static void Prefix() { }
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        return EquipmentInWaterTranspiler.ReplaceSwimmingChecks(instructions);
+    }
 }
 
 [HarmonyPatch(typeof(Humanoid), "UpdateEquipment")]
-internal static class EquipmentInWaterUpdateCompatibilityPatch
+internal static class EquipmentInWaterUpdatePatch
 {
-    private static void Prefix() { }
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        return EquipmentInWaterTranspiler.ReplaceSwimmingChecks(instructions);
+    }
+}
+
+internal static class EquipmentInWaterTranspiler
+{
+    private static readonly MethodInfo NativeIsSwimming = AccessTools.Method(typeof(Character), "IsSwimming");
+    private static readonly MethodInfo EquipmentIsSwimming = AccessTools.Method(typeof(EquipmentInWaterTranspiler), nameof(IsSwimmingForEquipment));
+
+    internal static IEnumerable<CodeInstruction> ReplaceSwimmingChecks(IEnumerable<CodeInstruction> instructions)
+    {
+        List<CodeInstruction> code = instructions.ToList();
+        int replacements = 0;
+        foreach (CodeInstruction instruction in code)
+        {
+            if ((instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt) &&
+                instruction.operand is MethodInfo method && NativeIsSwimming != null &&
+                EquipmentIsSwimming != null && method.Name == NativeIsSwimming.Name &&
+                method.GetParameters().Length == 0 && method.ReturnType == typeof(bool))
+            {
+                instruction.opcode = OpCodes.Call;
+                instruction.operand = EquipmentIsSwimming;
+                replacements++;
+            }
+        }
+
+        if (replacements == 0)
+            Plugin.LogWarning("Equipment in water: no IsSwimming call was found in an equipment method on this Valheim build.");
+        return code;
+    }
+
+    // This helper is only injected at the two equipment call sites. It does
+    // not patch Character.IsSwimming globally, so swimming movement, drowning,
+    // swimming stamina and animation state keep their native behavior.
+    private static bool IsSwimmingForEquipment(Character character)
+    {
+        if (Plugin.IsFeatureEnabled(Plugin.EquipmentInWater) && character is Player)
+            return false;
+        return character != null && character.IsSwimming();
+    }
 }
 
 [HarmonyPatch(typeof(Player), "UseStamina")]
@@ -671,7 +740,8 @@ internal static class SpeedyPathsState
 
     internal static void Update(Player player)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) || !Plugin.IsLocalPlayer(player) || player.IsDead())
+        bool pathFeatureActive = Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) || Plugin.IsFeatureEnabled(Plugin.NoStaminaOnPaths);
+        if (!pathFeatureActive || !Plugin.IsLocalPlayer(player) || player.IsDead())
         {
             ActiveSpeedMultiplier = 1f;
             ActiveStaminaMultiplier = 1f;
@@ -742,10 +812,16 @@ internal static class SpeedyPathsState
                 }
             }
 
-            Heightmap heightmap = ground.GetComponent<Heightmap>();
-            Texture2D paintMask = PaintMaskField?.GetValue(heightmap) as Texture2D;
+            Heightmap heightmap = ground.GetComponent<Heightmap>() ?? ground.GetComponentInParent<Heightmap>();
+            if (heightmap == null || PaintMaskField == null || WorldToVertexMethod == null)
+                return QolGroundType.Untamed;
+
+            // Do not reflect an instance field with a null target. On terrain
+            // colliders that are not Heightmap-owned this used to throw every
+            // sensor tick, so paths silently fell back to Untamed.
+            Texture2D paintMask = PaintMaskField.GetValue(heightmap) as Texture2D;
             object rawLastPoint = LastGroundPointField?.GetValue(player);
-            if (heightmap == null || paintMask == null || !paintMask.isReadable || WorldToVertexMethod == null || rawLastPoint is not Vector3 lastPoint)
+            if (paintMask == null || !paintMask.isReadable || rawLastPoint is not Vector3 lastPoint)
                 return QolGroundType.Untamed;
 
             WorldToVertexArgs[0] = lastPoint;
@@ -792,7 +868,7 @@ internal static class SpeedyPathsStaminaPatch
     private static void Prefix(Player __instance, out float __state)
     {
         __state = __instance.m_runStaminaDrain;
-        if (Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) && Plugin.IsLocalPlayer(__instance))
+        if ((Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) || Plugin.IsFeatureEnabled(Plugin.NoStaminaOnPaths)) && Plugin.IsLocalPlayer(__instance))
             __instance.m_runStaminaDrain *= SpeedyPathsState.ActiveStaminaMultiplier;
     }
 
@@ -822,6 +898,22 @@ internal static class SpeedyPathsRunPatch
     }
 }
 
+[HarmonyPatch(typeof(Container), "Awake")]
+internal static class MultiUserChestAwakePatch
+{
+    private static void Postfix(Container __instance)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests) || __instance == null || __instance.m_nview != null) return;
+
+        // Some containers keep their ZNetView on a root override. Resolve it
+        // reflectively so this combined plugin remains compatible with the
+        // publicized Valheim 1.0 field layout without hard-linking an optional
+        // root-object field.
+        GameObject root = AccessTools.Field(typeof(Container), "m_rootObjectOverride")?.GetValue(__instance) as GameObject;
+        __instance.m_nview = root != null ? root.GetComponent<ZNetView>() : __instance.GetComponent<ZNetView>();
+    }
+}
+
 [HarmonyPatch(typeof(Container), "RPC_RequestOpen")]
 internal static class MultiUserChestOpenPatch
 {
@@ -834,14 +926,35 @@ internal static class MultiUserChestOpenPatch
             __instance.m_nview.InvokeRPC(uid, "OpenRespons", false);
             return false;
         }
-        if (__instance.IsInUse() && playerID != ZNet.GetUID())
+        if (IsContainerInUse(__instance, playerID))
         {
-            // Same behavior as No-Chest-Block/MultiUserChest: acknowledge the
-            // second open without transferring the container's network owner.
+            // Acknowledge a second opener without transferring ownership away
+            // from the player who currently owns the container.
             __instance.m_nview.InvokeRPC(uid, "OpenRespons", true);
             return false;
         }
-        return true;
+
+        // Use the same ownership hand-off as No-Chest-Block. Returning true
+        // here lets vanilla run its exclusive-use branch before our second
+        // player can open, which was the reason the old patch still appeared
+        // to do nothing on dedicated servers.
+        if (ZDOMan.instance != null && __instance.m_nview.GetZDO() != null)
+        {
+            ZDOMan.instance.ForceSendZDO(uid, __instance.m_nview.GetZDO().m_uid);
+            __instance.m_nview.GetZDO().SetOwner(uid);
+        }
+        __instance.m_nview.InvokeRPC(uid, "OpenRespons", true);
+        return false;
+    }
+
+    internal static bool IsContainerInUse(Container container, long playerId)
+    {
+        bool inUse = container.IsInUse();
+        FieldInfo wagonField = AccessTools.Field(typeof(Container), "m_wagon");
+        object wagon = wagonField?.GetValue(container);
+        MethodInfo wagonInUse = wagon == null ? null : AccessTools.Method(wagon.GetType(), "InUse");
+        if (wagonInUse != null && wagonInUse.ReturnType == typeof(bool)) inUse |= (bool)wagonInUse.Invoke(wagon, null);
+        return inUse && playerId != ZNet.GetUID();
     }
 }
 
@@ -857,12 +970,19 @@ internal static class MultiUserChestStackPatch
             __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", false);
             return false;
         }
-        if (__instance.IsInUse() && playerID != ZNet.GetUID())
+        if (MultiUserChestOpenPatch.IsContainerInUse(__instance, playerID))
         {
             __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", true);
             return false;
         }
-        return true;
+
+        if (ZDOMan.instance != null && __instance.m_nview.GetZDO() != null)
+        {
+            ZDOMan.instance.ForceSendZDO(uid, __instance.m_nview.GetZDO().m_uid);
+            __instance.m_nview.GetZDO().SetOwner(uid);
+        }
+        __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", true);
+        return false;
     }
 }
 
@@ -1132,6 +1252,7 @@ internal static class SitRegenerationFixedPatch
 internal static class DivingPatch
 {
     internal static bool DiveToggle;
+    private static float LastRequestedDepth = 1.6f;
 
     private static bool IsDiveHeld()
     {
@@ -1151,7 +1272,14 @@ internal static class DivingPatch
     internal static bool IsLocalWaterPlayer(Character character)
     {
         return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
-               Plugin.IsLocalPlayer(player) && player.InWater() && !player.IsOnGround() && !player.IsDead();
+               Plugin.IsLocalPlayer(player) && IsInLiquid(player) && !player.IsOnGround() && !player.IsDead();
+    }
+
+    internal static bool IsInLiquid(Player player)
+    {
+        if (player == null) return false;
+        if (player.InWater()) return true;
+        return Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 0.15f;
     }
 
     internal static bool HasDiveTarget(Player player)
@@ -1182,7 +1310,7 @@ internal static class DivingPatch
         // transition below the surface; resetting m_swimDepth there restores
         // the vanilla 1.6 target and launches the player back up.
         if (player.IsOnGround() || player.IsDead() ||
-            (!player.InWater() && !DiveToggle && !IsActuallyUnderwater(player)))
+            (!IsInLiquid(player) && !IsActuallyUnderwater(player)))
         {
             DiveToggle = false;
             player.m_swimDepth = 1.6f;
@@ -1216,6 +1344,9 @@ internal static class DivingPatch
         }
 
         player.m_swimDepth = Mathf.Clamp(depth, 1.6f, 20f);
+        LastRequestedDepth = player.m_swimDepth;
+        if (surface && !directDive && player.m_swimDepth <= 1.65f)
+            DiveToggle = false;
         if (player.m_swimDepth > 2.5f && DiveToggle && IsForwardHeld()) player.SetMoveDir(___m_lookDir);
 
         // BetterDiving keeps both native timers alive while the target is
@@ -1230,6 +1361,26 @@ internal static class DivingPatch
         if (Plugin.DiveStaminaPerSecond.Value > 0f && (directDive || surface || DiveToggle))
             player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
     }
+
+    private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
+    {
+        if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player) ||
+            player.IsOnGround() || player.IsDead() || !IsInLiquid(player)) return;
+
+        bool controllingDepth = DiveToggle || IsDiveHeld() || IsSurfaceHeld();
+        if (!controllingDepth) return;
+
+        // Character.CustomFixedUpdate can rewrite m_swimDepth after a prefix
+        // (and this is also where some water mods do it). Re-apply the target
+        // after vanilla has finished so the dive is not cancelled a frame
+        // later and the native swim timer cannot launch the player upward.
+        player.m_swimDepth = Mathf.Clamp(LastRequestedDepth, 1.6f, 20f);
+        if (player.m_swimDepth > 2.5f || DiveToggle)
+        {
+            ___m_lastGroundTouch = 0.3f;
+            ___m_swimTimer = 0f;
+        }
+    }
 }
 
 // Input edge detection belongs in Player.Update. Reading GetButtonDown from a
@@ -1241,10 +1392,20 @@ internal static class DivingInputPatch
     private static void Prefix(Player __instance)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
-            !__instance.InWater() || __instance.IsOnGround() || __instance.IsDead()) return;
+            !DivingPatch.IsInLiquid(__instance) || __instance.IsOnGround() || __instance.IsDead()) return;
 
         if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
-            DivingPatch.DiveToggle = !DivingPatch.DiveToggle;
+        {
+            // Match BetterDiving's state machine: crouch starts a dive, but
+            // pressing crouch again while already below the surface must not
+            // cancel the native underwater state. A second press only cancels
+            // once the player has returned to the surface band; otherwise the
+            // next vanilla swim-timer update launches the player upward.
+            if (!DivingPatch.DiveToggle)
+                DivingPatch.DiveToggle = true;
+            else if (__instance.m_swimDepth <= 2.5f)
+                DivingPatch.DiveToggle = false;
+        }
     }
 }
 
@@ -1267,7 +1428,15 @@ internal static class DivingMotionPatch
         // allowed to expire, even when m_swimDepth is still below the surface.
         // Keep the native swimmer alive based on actual liquid depth, not the
         // transient InWater() cache or the input toggle.
-        if (DivingPatch.IsActuallyUnderwater(player))
+        // BetterDiving's actual-liquid check is the important part, but the
+        // native swimmer can expire its timer during the short transition in
+        // which the target depth is already underwater while the body is only
+        // partly submerged. Keep the timer alive for that controlled dive too;
+        // otherwise Valheim applies its upward surface impulse after a few
+        // seconds, which is the recurring bounce reported on dedicated
+        // servers.
+        bool controlledDive = player.m_swimDepth > 2.5f && DivingPatch.IsInLiquid(player);
+        if (DivingPatch.IsActuallyUnderwater(player) || controlledDive)
         {
             ___m_lastGroundTouch = 0.3f;
             ___m_swimTimer = 0f;
@@ -1329,9 +1498,12 @@ internal static class DivingCameraPatch
 internal static class CurrencyPickupPatch
 {
     [HarmonyPriority(Priority.LowerThanNormal)]
-    private static bool Prefix(Humanoid __instance, GameObject go, bool autoPickupDelay, ref bool __result)
+    private static bool Prefix(Humanoid __instance, GameObject go, bool autoPickupDelay, bool __runOriginal, ref bool __result)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) || __instance is not Player player || go == null || player.IsTeleporting()) return true;
+        // If another pickup patch already handled this drop, do not credit it
+        // a second time. This also makes leaving an old CurrencyPocket copy in
+        // the plugin folder fail closed instead of duplicating the balance.
+        if (!__runOriginal || !Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) || __instance is not Player player || go == null || player.IsTeleporting()) return true;
         ItemDrop drop = go.GetComponent<ItemDrop>();
         if (drop == null || drop.m_itemData?.m_shared == null || drop.m_itemData.m_shared.m_name != Plugin.CoinToken) return true;
         if (drop.m_nview == null || drop.m_nview.GetZDO() == null) return true;
@@ -1346,6 +1518,7 @@ internal static class CurrencyPickupPatch
             __result = true;
             return false;
         }
+        CurrencyAutoPickupContextPatch.Active = false;
         dropZdo.Set(Plugin.CoinConsumedKey, true);
         if (drop.m_itemData.m_dropPrefab == null && ObjectDB.instance != null)
             drop.m_itemData.m_dropPrefab = ObjectDB.instance.GetItemPrefab(Utils.GetPrefabName(go));
@@ -1390,19 +1563,20 @@ internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHan
 {
     public void OnPointerClick(PointerEventData eventData)
     {
-        // Keep the drag-and-drop behavior from CurrencyPocket, but also make
-        // the pocket itself a reliable one-click "deposit all coins" target.
-        // This avoids requiring players to first split a stack or rely on the
-        // small buttons when an inventory layout mod has moved the panel.
-        if (!Plugin.DepositDraggedCoins()) Plugin.DepositInventoryCoins();
+        // Valheim's InventoryGrid finishes a drag over UI with a pointer
+        // click, not a Unity drop event. Only treat the click as a deposit
+        // when a coin stack is actually being dragged; the old unconditional
+        // click handler moved the whole inventory stack whenever the pocket
+        // card was merely selected.
+        Plugin.DepositDraggedCoins();
     }
 
     public void OnDrop(PointerEventData eventData)
     {
-        // A real drag ends with IDropHandler, not IPointerClickHandler. Keep
-        // the click fallback above for controller/mouse users, but process
-        // inventory coin stacks through the actual drop event as well.
-        if (!Plugin.DepositDraggedCoins()) Plugin.DepositInventoryCoins();
+        // Some UI layouts raise OnDrop instead of OnPointerClick. The
+        // DepositDraggedCoins guard is idempotent because it clears the drag
+        // item after a successful transfer.
+        Plugin.DepositDraggedCoins();
     }
 }
 
