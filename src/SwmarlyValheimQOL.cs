@@ -57,10 +57,12 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<float> PathSensorInterval;
     internal static ConfigEntry<float> DirtPathSpeed;
     internal static ConfigEntry<float> StonePathSpeed;
+    internal static ConfigEntry<float> CultivatedSpeed;
     internal static ConfigEntry<float> WoodPathSpeed;
     internal static ConfigEntry<float> StoneStructureSpeed;
     internal static ConfigEntry<float> DirtPathStamina;
     internal static ConfigEntry<float> StonePathStamina;
+    internal static ConfigEntry<float> CultivatedStamina;
     internal static ConfigEntry<float> StructurePathStamina;
     internal static ConfigEntry<float> AfkMinutes;
     internal static ConfigEntry<float> AfkMovementThreshold;
@@ -77,6 +79,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal const string CoinKey = "SwmarlyValheimQOL_Coins";
     internal const string LegacyCoinKey = "CoinPocket_CoinCount";
     internal const string CoinMigrationKey = "SwmarlyValheimQOL_CoinMigrationComplete";
+    internal const string CoinConsumedKey = "SwmarlyValheimQOL_CoinDropConsumed";
     internal const string CoinPrefab = "Coins";
     internal const string CoinToken = "$item_coins";
     internal const string PocketUiName = "SwmarlyValheimQOL_CurrencyPocket";
@@ -88,6 +91,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static Button PocketDepositButton;
     internal static TextMeshProUGUI PocketText;
     internal static Coroutine PocketUiRepositionCoroutine;
+    internal static float HotbarEquipAllowanceUntil;
 
     internal static readonly HashSet<long> SleepYes = new();
     internal static readonly HashSet<long> SleepNo = new();
@@ -159,10 +163,12 @@ public sealed class Plugin : BaseUnityPlugin
         PathSensorInterval = Config.Bind("Speedy paths", "Ground sensor interval", 0.25f, new ConfigDescription("Seconds between ground-material checks for the local player.", new AcceptableValueRange<float>(0.05f, 2f)));
         DirtPathSpeed = Config.Bind("Speedy paths", "Dirt path speed", 1.15f, new ConfigDescription("Movement multiplier on dirt paths.", new AcceptableValueRange<float>(0.1f, 3f)));
         StonePathSpeed = Config.Bind("Speedy paths", "Stone path speed", 1.4f, new ConfigDescription("Movement multiplier on stone paths.", new AcceptableValueRange<float>(0.1f, 3f)));
+        CultivatedSpeed = Config.Bind("Speedy paths", "Cultivated ground speed", 1f, new ConfigDescription("Movement multiplier on cultivated ground.", new AcceptableValueRange<float>(0.1f, 3f)));
         WoodPathSpeed = Config.Bind("Speedy paths", "Wood structure speed", 1.15f, new ConfigDescription("Movement multiplier on wood structures.", new AcceptableValueRange<float>(0.1f, 3f)));
         StoneStructureSpeed = Config.Bind("Speedy paths", "Stone structure speed", 1.4f, new ConfigDescription("Movement multiplier on stone/iron/marble structures.", new AcceptableValueRange<float>(0.1f, 3f)));
         DirtPathStamina = Config.Bind("Speedy paths", "Dirt path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on dirt paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
         StonePathStamina = Config.Bind("Speedy paths", "Stone path stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on stone paths. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
+        CultivatedStamina = Config.Bind("Speedy paths", "Cultivated ground stamina multiplier", 1f, new ConfigDescription("Running stamina multiplier on cultivated ground.", new AcceptableValueRange<float>(0f, 2f)));
         StructurePathStamina = Config.Bind("Speedy paths", "Structure stamina multiplier", 0f, new ConfigDescription("Running stamina multiplier on supported structures. 0 means no stamina usage.", new AcceptableValueRange<float>(0f, 2f)));
         AfkMinutes = Config.Bind("No AFK raids", "AFK minutes", 10f, new ConfigDescription("Minutes without meaningful movement before a player is treated as AFK.", new AcceptableValueRange<float>(0.1f, 240f)));
         AfkMovementThreshold = Config.Bind("No AFK raids", "Movement threshold", 0.1f, new ConfigDescription("Minimum movement in metres that resets AFK detection.", new AcceptableValueRange<float>(0.01f, 5f)));
@@ -465,27 +471,18 @@ public sealed class Plugin : BaseUnityPlugin
         RectTransform armorRect = armor == null ? null : armor.GetComponent<RectTransform>();
         if (pocketRect == null || armorRect == null) return;
 
-        // Expanded inventory mods reposition Armor and Weight after vanilla
-        // layout. Place the pocket from the final rendered bounds instead of
-        // relying on a fixed -234 offset that overlaps their number fields.
-        Transform reference = weight != null ? weight : armor;
-        RectTransform referenceRect = reference.GetComponent<RectTransform>();
+        // CurrencyPocket places the card between Armor and Weight. Placing it
+        // below Weight collides with the extra panels used by inventory/armor
+        // UI mods, which is what caused the old screenshot layout.
+        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
+        RectTransform referenceRect = weightRect;
         if (referenceRect == null || referenceRect.parent != pocketRect.parent) return;
         Canvas.ForceUpdateCanvases();
 
-        Vector3[] referenceCorners = new Vector3[4];
-        Vector3[] pocketCorners = new Vector3[4];
-        referenceRect.GetWorldCorners(referenceCorners);
-        pocketRect.GetWorldCorners(pocketCorners);
-        Transform parent = pocketRect.parent;
-        float referenceHeight = Vector3.Distance(referenceCorners[0], referenceCorners[1]);
-        float pocketHeight = Vector3.Distance(pocketCorners[0], pocketCorners[1]);
-        Vector3 referenceCenter = (referenceCorners[0] + referenceCorners[2]) * 0.5f;
-        float referenceGap = Mathf.Max(6f, referenceHeight * 0.08f);
-        Vector3 desiredCenter = referenceCenter - parent.up * ((referenceHeight + pocketHeight) * 0.5f + referenceGap);
-        desiredCenter.z = pocketRect.position.z;
-        pocketRect.position = desiredCenter;
-        pocketRect.SetSiblingIndex(Mathf.Min(reference.GetSiblingIndex() + 1, pocketRect.parent.childCount - 1));
+        if (armorRect.parent != pocketRect.parent) return;
+        pocketRect.anchoredPosition = new Vector2(armorRect.anchoredPosition.x,
+            (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f);
+        pocketRect.SetSiblingIndex(Mathf.Min(armor.GetSiblingIndex() + 1, pocketRect.parent.childCount - 1));
     }
 
     private static void SetPocketIcon()
@@ -543,9 +540,17 @@ internal static class EquipWhileRunningPatch
 
         for (int i = 1; i < code.Count; ++i)
         {
-            if (code[i].opcode != System.Reflection.Emit.OpCodes.Call && code[i].opcode != System.Reflection.Emit.OpCodes.Callvirt ||
-                code[i].operand is not MethodInfo called || called.DeclaringType != typeof(Character) ||
-                called.Name != nameof(Character.IsRunning) || called.ReturnType != typeof(bool)) continue;
+            if (code[i].opcode != System.Reflection.Emit.OpCodes.Call && code[i].opcode != System.Reflection.Emit.OpCodes.Callvirt)
+                continue;
+
+            MethodInfo called = code[i].operand as MethodInfo;
+            string operandText = code[i].operand?.ToString() ?? string.Empty;
+            bool isRunningQuery = called != null && called.Name == nameof(Character.IsRunning) &&
+                                  called.ReturnType == typeof(bool) &&
+                                  (called.DeclaringType == typeof(Character) ||
+                                   operandText.Contains("Character.IsRunning", StringComparison.Ordinal) ||
+                                   operandText.Contains("Character::IsRunning", StringComparison.Ordinal));
+            if (!isRunningQuery) continue;
 
             // EquipGearWhileRunning uses this same call-site patch. The run
             // check in CheckRun is the gate that makes Player.UseHotbarItem
@@ -570,7 +575,13 @@ internal static class EquipWhileRunningHotbarPatch
     private static void Prefix(Player __instance)
     {
         if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && Plugin.IsLocalPlayer(__instance))
+        {
             EquipWhileRunningPatch.HotbarTransactionDepth++;
+            // Valheim can defer the actual EquipItem call until the next
+            // update after UseHotbarItem returns. Keep the bypass alive for
+            // that deferred transaction as well as the immediate call.
+            Plugin.HotbarEquipAllowanceUntil = Time.time + 0.35f;
+        }
     }
 
     private static void Finalizer()
@@ -585,7 +596,7 @@ internal static class EquipWhileRunningQueryPatch
     private static bool Prefix(Character __instance, ref bool __result)
     {
         if (Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) && __instance == Player.m_localPlayer &&
-            EquipWhileRunningPatch.HotbarTransactionDepth > 0)
+            (EquipWhileRunningPatch.HotbarTransactionDepth > 0 || Time.time <= Plugin.HotbarEquipAllowanceUntil))
         {
             // UseHotbarItem is the authoritative transaction boundary. This
             // catches the running query even if a future Valheim build moves
@@ -619,6 +630,21 @@ internal static class EquipmentInWaterPatch
         }
         return true;
     }
+}
+
+// Use Equipment in Water installs empty patches for these methods as a
+// compatibility shim. It lets Harmony compose the IsSwimming call-site hook
+// with equipment mods that otherwise replace the same method body.
+[HarmonyPatch(typeof(Humanoid), "EquipItem")]
+internal static class EquipmentInWaterEquipCompatibilityPatch
+{
+    private static void Prefix() { }
+}
+
+[HarmonyPatch(typeof(Humanoid), "UpdateEquipment")]
+internal static class EquipmentInWaterUpdateCompatibilityPatch
+{
+    private static void Prefix() { }
 }
 
 [HarmonyPatch(typeof(Player), "UseStamina")]
@@ -699,6 +725,7 @@ internal static class SpeedyPathsState
         {
             QolGroundType.DirtPath => Mathf.Max(0.1f, Plugin.DirtPathSpeed.Value),
             QolGroundType.StonePath => Mathf.Max(0.1f, Plugin.StonePathSpeed.Value),
+            QolGroundType.Cultivated => Mathf.Max(0.1f, Plugin.CultivatedSpeed.Value),
             QolGroundType.WoodStructure => Mathf.Max(0.1f, Plugin.WoodPathSpeed.Value),
             QolGroundType.StoneStructure => Mathf.Max(0.1f, Plugin.StoneStructureSpeed.Value),
             _ => 1f
@@ -710,6 +737,8 @@ internal static class SpeedyPathsState
         if (ground is QolGroundType.DirtPath or QolGroundType.StonePath)
             return Plugin.IsFeatureEnabled(Plugin.NoStaminaOnPaths) ? 0f :
                 (ground == QolGroundType.DirtPath ? Mathf.Max(0f, Plugin.DirtPathStamina.Value) : Mathf.Max(0f, Plugin.StonePathStamina.Value));
+        if (ground == QolGroundType.Cultivated)
+            return Mathf.Max(0f, Plugin.CultivatedStamina.Value);
         if (ground is QolGroundType.WoodStructure or QolGroundType.StoneStructure)
             return Mathf.Max(0f, Plugin.StructurePathStamina.Value);
         return 1f;
@@ -876,11 +905,62 @@ internal static class NoAfkRaidsState
 
     private static readonly Dictionary<long, Activity> Players = new();
 
+    private static HashSet<long> GetConnectedPlayers()
+    {
+        HashSet<long> connected = new();
+        if (ZNet.instance == null) return connected;
+        foreach (ZNetPeer peer in ZNet.instance.m_peers)
+        {
+            if (peer?.m_characterID.UserID != 0) connected.Add(peer.m_characterID.UserID);
+        }
+        if (!ZNet.instance.IsDedicated()) connected.Add(ZNet.GetUID());
+        return connected;
+    }
+
+    private static bool TryGetEventPosition(object[] args, out Vector3 position)
+    {
+        if (args != null)
+        {
+            foreach (object argument in args)
+            {
+                if (argument is Vector3 directPosition)
+                {
+                    position = directPosition;
+                    return true;
+                }
+
+                if (argument == null) continue;
+                Type type = argument.GetType();
+                foreach (string name in new[] { "m_pos", "m_position", "m_eventPos", "m_spawnPoint", "m_spawnPos" })
+                {
+                    FieldInfo field = AccessTools.Field(type, name);
+                    if (field?.GetValue(argument) is Vector3 fieldPosition)
+                    {
+                        position = fieldPosition;
+                        return true;
+                    }
+                    PropertyInfo property = AccessTools.Property(type, name);
+                    if (property?.GetValue(argument) is Vector3 propertyPosition)
+                    {
+                        position = propertyPosition;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        position = default;
+        return false;
+    }
+
     internal static bool ShouldBlock(object[] args)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.NoAfkRaids) || ZNet.instance == null || !ZNet.instance.IsServer()) return false;
 
-        bool forced = args != null && args.Any(argument => argument is bool value && value);
+        // SetRandomEvent's last argument is its explicit/forced flag. Looking
+        // at every bool would also classify unrelated future parameters as a
+        // forced raid.
+        bool forced = args != null && args.Length > 0 && args[^1] is bool forcedArgument && forcedArgument;
         if (forced && !Plugin.IsFeatureEnabled(Plugin.BlockForcedRaids)) return false;
 
         List<ZDO> characters;
@@ -895,6 +975,7 @@ internal static class NoAfkRaidsState
 
         if (characters == null || characters.Count == 0) return false;
         DateTime now = DateTime.UtcNow;
+        HashSet<long> connected = GetConnectedPlayers();
         int connectedPlayers = 0;
         int afkPlayers = 0;
         HashSet<long> seen = new();
@@ -903,6 +984,7 @@ internal static class NoAfkRaidsState
         {
             if (zdo == null || zdo.m_uid.UserID == 0) continue;
             long userId = zdo.m_uid.UserID;
+            if (connected.Count > 0 && !connected.Contains(userId)) continue;
             seen.Add(userId);
             connectedPlayers++;
             Vector3 position = zdo.m_position;
@@ -919,11 +1001,27 @@ internal static class NoAfkRaidsState
         foreach (long userId in Players.Keys.ToArray())
             if (!seen.Contains(userId)) Players.Remove(userId);
 
-        // The reference NoAFKRaids implementation protects an event when the
-        // players around it are AFK. The server has authoritative character
-        // positions, so this server-side position tracker works on a
-        // dedicated server without relying on a client-only input loop.
-        return connectedPlayers > 0 && afkPlayers >= connectedPlayers;
+        if (connectedPlayers <= 0) return false;
+
+        // NoAFKRaids protects the event area, not merely the whole world. A
+        // moving player elsewhere must not make an AFK player beside the raid
+        // vulnerable, and an AFK player far away must not suppress a local
+        // event. If the current Valheim build does not expose the event point
+        // in the RPC arguments, retain the safe all-AFK fallback.
+        if (TryGetEventPosition(args, out Vector3 eventPosition) && Plugin.AfkProtectionRadius.Value > 0f)
+        {
+            float radius = Plugin.AfkProtectionRadius.Value;
+            foreach (ZDO zdo in characters)
+            {
+                if (zdo == null || zdo.m_uid.UserID == 0 || (connected.Count > 0 && !connected.Contains(zdo.m_uid.UserID))) continue;
+                if (!Players.TryGetValue(zdo.m_uid.UserID, out Activity activity)) continue;
+                if ((DateTime.UtcNow - activity.LastActivity).TotalMinutes < Mathf.Max(0.1f, Plugin.AfkMinutes.Value)) continue;
+                if (Vector3.Distance(activity.Position, eventPosition) <= radius) return true;
+            }
+            return false;
+        }
+
+        return afkPlayers >= connectedPlayers;
     }
 }
 
@@ -1182,7 +1280,17 @@ internal static class DivingCameraPatch
     private static readonly Dictionary<int, float> OriginalWaterDistance = new();
     private static readonly Dictionary<int, float> OriginalMaxDistance = new();
 
+    private static void Prefix(GameCamera __instance, Camera ___m_camera)
+    {
+        Apply(__instance, ___m_camera);
+    }
+
     private static void Postfix(GameCamera __instance, Camera ___m_camera)
+    {
+        Apply(__instance, ___m_camera);
+    }
+
+    private static void Apply(GameCamera __instance, Camera ___m_camera)
     {
         Player player = Player.m_localPlayer;
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || player == null || ___m_camera == null) return;
@@ -1191,13 +1299,16 @@ internal static class DivingCameraPatch
         if (!OriginalWaterDistance.ContainsKey(id)) OriginalWaterDistance[id] = __instance.m_minWaterDistance;
         if (!OriginalMaxDistance.ContainsKey(id)) OriginalMaxDistance[id] = __instance.m_maxDistance;
 
-        bool targetUnderwater = DivingPatch.IsLocalWaterPlayer(player) && DivingPatch.HasDiveTarget(player);
-        bool cameraUnderwater = DivingPatch.IsLocalWaterPlayer(player) &&
+        bool localWaterPlayer = DivingPatch.IsLocalWaterPlayer(player);
+        bool targetUnderwater = localWaterPlayer && DivingPatch.HasDiveTarget(player);
+        bool cameraUnderwater = localWaterPlayer &&
                                 ___m_camera.transform.position.y < player.GetLiquidLevel() - 0.05f;
 
-        // The reference camera patch does this after the game's own camera
-        // update. A prefix is overwritten by some 1.0 camera paths, which is
-        // why the old implementation still left the camera above the player.
+        // BetterDiving applies the minimum-water override before the game's
+        // camera solve and keeps it in a postfix as well. The prefix matters
+        // on Valheim 1.0 because UpdateCamera can clamp the camera back above
+        // the player during the same frame; the postfix protects against
+        // camera mods that run later in the chain.
         if (targetUnderwater || cameraUnderwater)
         {
             __instance.m_minWaterDistance = -5000f;
@@ -1222,6 +1333,17 @@ internal static class CurrencyPickupPatch
         if (drop == null || drop.m_itemData?.m_shared == null || drop.m_itemData.m_shared.m_name != Plugin.CoinToken) return true;
         if (drop.m_nview == null || drop.m_nview.GetZDO() == null) return true;
         if (!drop.CanPickup(autoPickupDelay)) return true;
+        ZDO dropZdo = drop.m_nview.GetZDO();
+        // Pickup can be entered twice in one AutoPickup pass, and two clients
+        // can receive the same drop before the network destroy arrives. Mark
+        // the authoritative ZDO before changing the pocket balance so a coin
+        // stack can never be counted twice.
+        if (dropZdo.GetBool(Plugin.CoinConsumedKey))
+        {
+            __result = true;
+            return false;
+        }
+        dropZdo.Set(Plugin.CoinConsumedKey, true);
         if (drop.m_itemData.m_dropPrefab == null && ObjectDB.instance != null)
             drop.m_itemData.m_dropPrefab = ObjectDB.instance.GetItemPrefab(Utils.GetPrefabName(go));
         int amount = drop.m_itemData.m_stack;
@@ -1261,7 +1383,7 @@ internal static class CurrencyAutoPickupCapacityPatch
     }
 }
 
-internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHandler
+internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHandler, IDropHandler
 {
     public void OnPointerClick(PointerEventData eventData)
     {
@@ -1269,6 +1391,14 @@ internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHan
         // the pocket itself a reliable one-click "deposit all coins" target.
         // This avoids requiring players to first split a stack or rely on the
         // small buttons when an inventory layout mod has moved the panel.
+        if (!Plugin.DepositDraggedCoins()) Plugin.DepositInventoryCoins();
+    }
+
+    public void OnDrop(PointerEventData eventData)
+    {
+        // A real drag ends with IDropHandler, not IPointerClickHandler. Keep
+        // the click fallback above for controller/mouse users, but process
+        // inventory coin stacks through the actual drop event as well.
         if (!Plugin.DepositDraggedCoins()) Plugin.DepositInventoryCoins();
     }
 }
