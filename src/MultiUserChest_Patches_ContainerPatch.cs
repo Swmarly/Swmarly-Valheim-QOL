@@ -1,7 +1,4 @@
-using System;
-using System.Linq;
 using HarmonyLib;
-using UnityEngine;
 
 namespace SwmarlyValheimQOL {
     [HarmonyPatch]
@@ -23,71 +20,33 @@ namespace SwmarlyValheimQOL {
 
         [HarmonyPatch(typeof(Container), nameof(Container.Awake)), HarmonyPostfix]
         public static void ContainerAwakePatch(Container __instance) {
-            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
-            __instance.gameObject.AddComponent<ContainerExtend>();
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests) || __instance == null) return;
 
-            if (__instance.IgnoreInventory()) {
-                return;
-            }
+            // Awake can be reached more than once by some networked container
+            // prefabs. Do not attach duplicate state components.
+            if (!__instance.GetComponent<ContainerExtend>())
+                __instance.gameObject.AddComponent<ContainerExtend>();
 
-            if (!__instance.m_nview) {
-                __instance.m_nview = __instance.m_rootObjectOverride ? __instance.m_rootObjectOverride.GetComponent<ZNetView>() : __instance.GetComponent<ZNetView>();
-            }
+            if (__instance.IgnoreInventory()) return;
+
+            if (!__instance.m_nview)
+                __instance.m_nview = __instance.m_rootObjectOverride
+                    ? __instance.m_rootObjectOverride.GetComponent<ZNetView>()
+                    : __instance.GetComponent<ZNetView>();
         }
 
-        // This could maybe converted to a transpiler but is currently not worth it as the order of the statements have to be changed
-        [HarmonyPatch(typeof(Container), nameof(Container.RPC_RequestOpen)), HarmonyPrefix]
-        public static bool ContainerRPC_RequestOpenPatch(Container __instance, long uid, long playerID) {
-            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
-            if (__instance.IgnoreInventory() || !__instance.m_nview.IsOwner()) {
+        // Keep Valheim's native open/stack RPCs. The old combined patch
+        // replaced those RPCs and could leave a dedicated-server client with
+        // no successful OpenRespons response at all. Suppressing only the
+        // native in-use result is enough to allow simultaneous users while
+        // preserving the current Valheim 1.0 access/ownership flow.
+        [HarmonyPatch(typeof(Container), nameof(Container.IsInUse)), HarmonyPrefix]
+        public static bool ContainerIsInUsePatch(Container __instance, ref bool __result) {
+            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests) || __instance == null || __instance.IgnoreInventory())
                 return true;
-            }
 
-            if (!__instance.CheckAccess(playerID)) {
-                __instance.m_nview.InvokeRPC(uid, "OpenRespons", false);
-                return false;
-            }
-
-            if (IsContainerInUse(__instance, uid)) {
-                __instance.m_nview.InvokeRPC(uid, "OpenRespons", true);
-                return false;
-            }
-
-            ZDOMan.instance.ForceSendZDO(uid, __instance.m_nview.GetZDO().m_uid);
-            __instance.m_nview.GetZDO().SetOwner(uid);
-            __instance.m_nview.InvokeRPC(uid, "OpenRespons", true);
-
+            __result = false;
             return false;
-        }
-
-        [HarmonyPatch(typeof(Container), nameof(Container.RPC_RequestStack)), HarmonyPrefix]
-        public static bool ContainerRPC_RequestStackPatch(Container __instance, long uid, long playerID) {
-            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return true;
-            if (__instance.IgnoreInventory() || !__instance.m_nview.IsOwner()) {
-                return true;
-            }
-
-            if (!__instance.CheckAccess(playerID)) {
-                __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", false);
-                return false;
-            }
-
-            if (IsContainerInUse(__instance, uid)) {
-                __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", true);
-                return false;
-            }
-
-            ZDOMan.instance.ForceSendZDO(uid, __instance.m_nview.GetZDO().m_uid);
-            __instance.m_nview.GetZDO().SetOwner(uid);
-            __instance.m_nview.InvokeRPC(uid, "RPC_StackResponse", true);
-            return false;
-        }
-
-        private static bool IsContainerInUse(Container container, long playerId) {
-            bool containerUse = container.IsInUse();
-            bool wagonUse = container.m_wagon && container.m_wagon.InUse();
-            bool isMe = playerId == ZNet.GetUID();
-            return (containerUse || wagonUse) && !isMe;
         }
     }
 }
