@@ -59,8 +59,12 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> SleepAutoAccept;
 
     internal const string CoinKey = "SwmarlyValheimQOL_Coins";
+    internal const string LegacyCoinKey = "CoinPocket_CoinCount";
     internal const string CoinPrefab = "Coins";
     internal const string CoinToken = "$item_coins";
+    internal const string PocketUiName = "SwmarlyValheimQOL_CurrencyPocket";
+    internal const string LegacyPocketUiName = "CoinPocketUI";
+    internal const string PocketButtonRowName = "SwmarlyValheimQOL_CoinButtons";
     internal static int LastPocketValue;
     internal static GameObject PocketUi;
     internal static Button PocketExtractButton;
@@ -147,8 +151,27 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static int GetPocketCoins(Player player)
     {
-        if (player == null || player.m_customData == null || !player.m_customData.TryGetValue(CoinKey, out string value)) return 0;
-        return int.TryParse(value, out int coins) ? Math.Max(0, coins) : 0;
+        if (player == null || player.m_customData == null) return 0;
+
+        int coins = 0;
+        bool migrated = false;
+        foreach (string key in new[] { CoinKey, LegacyCoinKey })
+        {
+            if (!player.m_customData.TryGetValue(key, out string value) || !int.TryParse(value, out int stored)) continue;
+            coins += Math.Max(0, stored);
+            migrated |= key == LegacyCoinKey;
+        }
+
+        // CurrencyPocket stores the same balance under CoinPocket_CoinCount.
+        // Migrate it once so leaving the standalone mod installed cannot leave
+        // a second balance behind after this combined mod is enabled.
+        if (migrated)
+        {
+            player.m_customData[CoinKey] = Math.Max(0, coins).ToString();
+            player.m_customData.Remove(LegacyCoinKey);
+        }
+
+        return Math.Max(0, coins);
     }
 
     internal static void SetPocketCoins(Player player, int coins)
@@ -225,44 +248,123 @@ public sealed class Plugin : BaseUnityPlugin
         Transform weight = inventoryRoot.Find("Weight");
         if (armor == null) return;
 
-        if (PocketUi != null)
+        // A GUI can survive a world/player transition and old versions of the
+        // combined mod could also leave two cloned panels behind. Adopt one
+        // panel and remove every duplicate before doing any layout work.
+        GameObject existing = null;
+        for (int i = inventoryRoot.childCount - 1; i >= 0; --i)
         {
-            RepositionPocketUi(inventoryRoot, armor, weight);
-            SetPocketIcon();
-            return;
+            Transform child = inventoryRoot.GetChild(i);
+            if (child.name == PocketUiName)
+            {
+                if (existing == null) existing = child.gameObject;
+                else Object.Destroy(child.gameObject);
+            }
+            else if (child.name == LegacyPocketUiName)
+            {
+                // The standalone CurrencyPocket plugin uses a different
+                // custom-data key and a second panel. Remove that visual copy;
+                // its balance is migrated by GetPocketCoins above.
+                Object.Destroy(child.gameObject);
+            }
         }
 
-        PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
-        PocketUi.name = "SwmarlyValheimQOL_CurrencyPocket";
-        PocketUi.AddComponent<CurrencyPocketDropTarget>();
-        RepositionPocketUi(inventoryRoot, armor, weight);
-        SetPocketIcon();
+        if (PocketUi == null || PocketUi.transform.parent != inventoryRoot || !PocketUi)
+            PocketUi = existing;
+        if (PocketUi == null)
+        {
+            PocketUi = Object.Instantiate(armor.gameObject, inventoryRoot);
+            PocketUi.name = PocketUiName;
+        }
+
+        CurrencyPocketDropTarget[] targets = PocketUi.GetComponents<CurrencyPocketDropTarget>();
+        if (targets.Length == 0) PocketUi.AddComponent<CurrencyPocketDropTarget>();
+        for (int i = 1; i < targets.Length; ++i) Object.Destroy(targets[i]);
+
         Transform text = Utils.FindChild(PocketUi.transform, "ac_text");
         PocketText = text == null ? null : text.GetComponent<TextMeshProUGUI>();
         if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
 
-        if (gui.m_takeAllButton != null)
-        {
-            PocketExtractButton = Object.Instantiate(gui.m_takeAllButton, PocketUi.transform);
-            PocketExtractButton.name = "SwmarlyValheimQOL_ExtractCoins";
-            TextMeshProUGUI buttonText = PocketExtractButton.GetComponentInChildren<TextMeshProUGUI>();
-            if (buttonText != null) buttonText.text = "↗";
-            RectTransform buttonRect = PocketExtractButton.GetComponent<RectTransform>();
-            if (buttonRect != null) buttonRect.localPosition = new Vector3(2.5f, -20f, 0f);
-            PocketExtractButton.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
-            PocketExtractButton.onClick = new Button.ButtonClickedEvent();
-            PocketExtractButton.onClick.AddListener(ExtractPocketCoins);
+        EnsurePocketButtons(gui);
+        RepositionPocketUi(inventoryRoot, armor, weight);
+        SetPocketIcon();
+    }
 
-            PocketDepositButton = Object.Instantiate(gui.m_takeAllButton, PocketUi.transform);
-            PocketDepositButton.name = "SwmarlyValheimQOL_DepositCoins";
-            TextMeshProUGUI depositText = PocketDepositButton.GetComponentInChildren<TextMeshProUGUI>();
-            if (depositText != null) depositText.text = "↓";
-            RectTransform depositRect = PocketDepositButton.GetComponent<RectTransform>();
-            if (depositRect != null) depositRect.localPosition = new Vector3(-11f, -20f, 0f);
-            PocketDepositButton.transform.localScale = new Vector3(0.4f, 0.4f, 1f);
-            PocketDepositButton.onClick = new Button.ButtonClickedEvent();
-            PocketDepositButton.onClick.AddListener(DepositInventoryCoins);
+    private static void EnsurePocketButtons(InventoryGui gui)
+    {
+        if (PocketUi == null || gui == null || gui.m_takeAllButton == null) return;
+
+        Transform rowTransform = PocketUi.transform.Find(PocketButtonRowName);
+        if (rowTransform == null)
+        {
+            GameObject row = new(PocketButtonRowName, typeof(RectTransform));
+            rowTransform = row.transform;
+            rowTransform.SetParent(PocketUi.transform, false);
         }
+
+        RectTransform rowRect = rowTransform as RectTransform;
+        if (rowRect == null) return;
+        rowRect.anchorMin = new Vector2(0.5f, 0f);
+        rowRect.anchorMax = new Vector2(0.5f, 0f);
+        rowRect.pivot = new Vector2(0.5f, 0.5f);
+        rowRect.sizeDelta = new Vector2(72f, 22f);
+        rowRect.anchoredPosition = new Vector2(0f, 12f);
+        rowRect.localRotation = Quaternion.identity;
+        rowRect.localScale = Vector3.one;
+
+        PocketExtractButton = FindPocketButton("SwmarlyValheimQOL_ExtractCoins");
+        PocketDepositButton = FindPocketButton("SwmarlyValheimQOL_DepositCoins");
+        if (PocketExtractButton == null)
+        {
+            PocketExtractButton = Object.Instantiate(gui.m_takeAllButton, rowTransform);
+            PocketExtractButton.name = "SwmarlyValheimQOL_ExtractCoins";
+        }
+        if (PocketDepositButton == null)
+        {
+            PocketDepositButton = Object.Instantiate(gui.m_takeAllButton, rowTransform);
+            PocketDepositButton.name = "SwmarlyValheimQOL_DepositCoins";
+        }
+
+        ConfigurePocketButton(PocketExtractButton, "↑", new Vector2(18f, 0f), ExtractPocketCoins);
+        ConfigurePocketButton(PocketDepositButton, "↓", new Vector2(-18f, 0f), DepositInventoryCoins);
+        rowTransform.SetAsLastSibling();
+    }
+
+    private static Button FindPocketButton(string name)
+    {
+        if (PocketUi == null) return null;
+        foreach (Button button in PocketUi.GetComponentsInChildren<Button>(true))
+        {
+            if (button.name == name) return button;
+        }
+        return null;
+    }
+
+    private static void ConfigurePocketButton(Button button, string label, Vector2 position, UnityEngine.Events.UnityAction action)
+    {
+        if (button == null) return;
+        button.transform.SetParent(PocketUi.transform.Find(PocketButtonRowName), false);
+        button.transform.localScale = Vector3.one;
+        button.transform.localRotation = Quaternion.identity;
+
+        RectTransform rect = button.GetComponent<RectTransform>();
+        if (rect != null)
+        {
+            rect.anchorMin = new Vector2(0.5f, 0.5f);
+            rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = new Vector2(28f, 18f);
+            rect.anchoredPosition = position;
+            rect.localRotation = Quaternion.identity;
+            rect.localScale = Vector3.one;
+        }
+
+        LayoutElement layout = button.GetComponent<LayoutElement>();
+        if (layout != null) layout.ignoreLayout = true;
+        TextMeshProUGUI text = button.GetComponentInChildren<TextMeshProUGUI>(true);
+        if (text != null) text.text = label;
+        button.onClick = new Button.ButtonClickedEvent();
+        button.onClick.AddListener(action);
     }
 
     internal static void SchedulePocketUiReposition(InventoryGui gui)
@@ -293,8 +395,7 @@ public sealed class Plugin : BaseUnityPlugin
     private static void RepositionPocketUi(Transform inventoryRoot, Transform armor, Transform weight)
     {
         RectTransform pocketRect = PocketUi == null ? null : PocketUi.GetComponent<RectTransform>();
-        RectTransform armorRect = armor.GetComponent<RectTransform>();
-        RectTransform weightRect = weight == null ? null : weight.GetComponent<RectTransform>();
+        RectTransform armorRect = armor == null ? null : armor.GetComponent<RectTransform>();
         if (pocketRect == null || armorRect == null) return;
 
         // Expanded inventory mods reposition Armor and Weight after vanilla
@@ -310,17 +411,13 @@ public sealed class Plugin : BaseUnityPlugin
         referenceRect.GetWorldCorners(referenceCorners);
         pocketRect.GetWorldCorners(pocketCorners);
         Transform parent = pocketRect.parent;
-        float referenceBottom = parent.InverseTransformPoint(referenceCorners[0]).y;
-        float referenceCenterX = parent.InverseTransformPoint((referenceCorners[0] + referenceCorners[2]) * 0.5f).x;
-        Vector3 pocketMin = parent.InverseTransformPoint(pocketCorners[0]);
-        Vector3 pocketMax = parent.InverseTransformPoint(pocketCorners[2]);
-        float pocketHeight = Mathf.Abs(pocketMax.y - pocketMin.y);
-        float referenceGap = Mathf.Max(8f, pocketHeight * 0.12f);
-        float desiredCenterY = referenceBottom - referenceGap - pocketHeight * 0.5f;
-        Vector3 desiredPivot = parent.InverseTransformPoint(pocketRect.position);
-        desiredPivot.x = referenceCenterX;
-        desiredPivot.y = desiredCenterY + (pocketRect.pivot.y - 0.5f) * pocketHeight;
-        pocketRect.position = parent.TransformPoint(desiredPivot);
+        float referenceHeight = Vector3.Distance(referenceCorners[0], referenceCorners[1]);
+        float pocketHeight = Vector3.Distance(pocketCorners[0], pocketCorners[1]);
+        Vector3 referenceCenter = (referenceCorners[0] + referenceCorners[2]) * 0.5f;
+        float referenceGap = Mathf.Max(6f, referenceHeight * 0.08f);
+        Vector3 desiredCenter = referenceCenter - parent.up * ((referenceHeight + pocketHeight) * 0.5f + referenceGap);
+        desiredCenter.z = pocketRect.position.z;
+        pocketRect.position = desiredCenter;
         pocketRect.SetSiblingIndex(Mathf.Min(reference.GetSiblingIndex() + 1, pocketRect.parent.childCount - 1));
     }
 
@@ -370,6 +467,8 @@ internal static class EquipmentMovementSupport
 {
     private static readonly FieldInfo RunIntentField = AccessTools.Field(typeof(Character), "m_run");
     private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running");
+    private static readonly string[] HotbarButtons = { "Hotbar1", "Hotbar2", "Hotbar3", "Hotbar4", "Hotbar5", "Hotbar6", "Hotbar7", "Hotbar8" };
+    private static int EquipmentBypassDepth;
 
     private static bool GetFlag(FieldInfo field, Character character)
     {
@@ -420,6 +519,45 @@ internal static class EquipmentMovementSupport
         SetFlag(RunIntentField, player, state.OldRun);
         SetFlag(RunningField, player, state.OldRunning);
     }
+
+    internal static void EnterBypass()
+    {
+        EquipmentBypassDepth++;
+    }
+
+    internal static void ExitBypass()
+    {
+        EquipmentBypassDepth = Mathf.Max(0, EquipmentBypassDepth - 1);
+    }
+
+    internal static bool ShouldBypassRunningQuery()
+    {
+        if (EquipmentBypassDepth > 0) return true;
+        if (Plugin.IsLocalPlayer(Player.m_localPlayer) && HotbarButtons.Any(ZInput.GetButtonDown)) return true;
+
+        // Valheim performs the running restriction from different call sites
+        // across game builds. Match the same call-site approach used by
+        // UseEquipmentInWater instead of relying on one private field name.
+        StackTrace trace = new();
+        for (int i = 2; i < trace.FrameCount && i < 12; ++i)
+        {
+            string method = trace.GetFrame(i).GetMethod()?.Name;
+            if (method is "UseHotbarItem" or "UseItem" or "EquipItem" or "ToggleEquipped" or "UpdateEquipment") return true;
+        }
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Character), "IsRunning")]
+internal static class EquipmentRunningQueryPatch
+{
+    private static bool Prefix(Character __instance, ref bool __result)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !Plugin.IsLocalPlayer(player)) return true;
+        if (!EquipmentMovementSupport.ShouldBypassRunningQuery()) return true;
+        __result = false;
+        return false;
+    }
 }
 
 [HarmonyPatch(typeof(Player), "UseHotbarItem")]
@@ -431,6 +569,7 @@ internal static class EquipWhileRunningHotbarPatch
         ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
         if (item == null) return true;
 
+        EquipmentMovementSupport.EnterBypass();
         EquipmentMovementSupport.State state = EquipmentMovementSupport.SuspendRunning(__instance);
         try
         {
@@ -441,6 +580,7 @@ internal static class EquipWhileRunningHotbarPatch
         finally
         {
             EquipmentMovementSupport.RestoreRunning(__instance, state);
+            EquipmentMovementSupport.ExitBypass();
         }
         return false;
     }
@@ -453,12 +593,15 @@ internal static class EquipWhileRunningUseItemPatch
     {
         if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
         if (inventory != null && inventory != player.GetInventory()) return;
+        EquipmentMovementSupport.EnterBypass();
         __state = EquipmentMovementSupport.SuspendRunning(player);
     }
 
     private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
     {
+        if (__state == null) return;
         if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
+        EquipmentMovementSupport.ExitBypass();
     }
 }
 
@@ -468,12 +611,15 @@ internal static class EquipWhileRunningEquipItemPatch
     private static void Prefix(Humanoid __instance, ref EquipmentMovementSupport.State __state)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player player || !EquipmentMovementSupport.IsRunning(player)) return;
+        EquipmentMovementSupport.EnterBypass();
         __state = EquipmentMovementSupport.SuspendRunning(player);
     }
 
     private static void Postfix(Humanoid __instance, EquipmentMovementSupport.State __state)
     {
+        if (__state == null) return;
         if (__instance is Player player) EquipmentMovementSupport.RestoreRunning(player, __state);
+        EquipmentMovementSupport.ExitBypass();
     }
 }
 
@@ -589,7 +735,6 @@ internal static class PlayerQolUpdatePatch
 {
     private static readonly Dictionary<int, float> BaseCrouchSpeed = new();
     private static readonly Dictionary<int, float> BaseSwimSpeed = new();
-    private static readonly Dictionary<int, float> NextSitHeal = new();
 
     private static void Prefix(Player __instance)
     {
@@ -615,36 +760,96 @@ internal static class PlayerQolUpdatePatch
         if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SwimImprovements) && __instance.IsSwimming() && __instance.GetMoveDir().magnitude < 0.1f && Plugin.SwimIdleStaminaPerSecond.Value > 0f)
             __instance.UseStamina(-Plugin.SwimIdleStaminaPerSecond.Value * Time.deltaTime);
 
-        int id = __instance.GetInstanceID();
-        if (Plugin.IsLocalPlayer(__instance) && Plugin.IsFeatureEnabled(Plugin.SitRegeneration) && __instance.IsSitting() &&
-            (!NextSitHeal.TryGetValue(id, out float nextHeal) || Time.time >= nextHeal) && __instance.GetHealth() < __instance.GetMaxHealth())
-        {
-            NextSitHeal[id] = Time.time + 1f;
-            __instance.Heal(Plugin.SitHealPerSecond.Value);
-        }
     }
 }
 
-[HarmonyPatch(typeof(Character), "UpdateSwimming")]
+[HarmonyPatch(typeof(Player), "FixedUpdate")]
+internal static class SitRegenerationFixedPatch
+{
+    private static readonly Dictionary<int, float> Accumulator = new();
+
+    private static void Postfix(Player __instance)
+    {
+        int id = __instance.GetInstanceID();
+        if (!Plugin.IsLocalPlayer(__instance) || !Plugin.IsFeatureEnabled(Plugin.SitRegeneration) ||
+            !__instance.IsSitting() || __instance.GetHealth() >= __instance.GetMaxHealth())
+        {
+            Accumulator[id] = 0f;
+            return;
+        }
+
+        float accumulator = Accumulator.TryGetValue(id, out float previous) ? previous : 0f;
+        accumulator += Mathf.Max(0f, Time.fixedDeltaTime);
+        if (accumulator >= 1f && Plugin.SitHealPerSecond.Value > 0f)
+        {
+            float ticks = Mathf.Floor(accumulator);
+            accumulator -= ticks;
+            __instance.Heal(Plugin.SitHealPerSecond.Value * ticks);
+        }
+        Accumulator[id] = accumulator;
+    }
+}
+
+[HarmonyPatch(typeof(Character), "CustomFixedUpdate")]
 internal static class DivingPatch
 {
-    private static void Postfix(Character __instance)
+    private static bool IsDivePressed()
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.Diving) || __instance is not Player player || !Plugin.IsLocalPlayer(player) || !player.IsSwimming()) return;
-        Rigidbody body = player.GetComponent<Rigidbody>();
-        if (body == null) return;
+        return Plugin.DiveKey.Value.IsPressed() || ZInput.GetButton("Crouch") || ZInput.GetButton("JoyCrouch");
+    }
 
-        bool diving = Plugin.DiveKey.Value.IsPressed();
-        bool surfacing = Plugin.SurfaceKey.Value.IsPressed();
+    private static bool IsSurfacePressed()
+    {
+        return Plugin.SurfaceKey.Value.IsPressed() || ZInput.GetButton("Jump") || ZInput.GetButton("JoyJump");
+    }
+
+    private static bool IsControllableSwimmer(Character character)
+    {
+        return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
+               Plugin.IsLocalPlayer(player) && player.InWater() && !player.IsOnGround() && player.IsSwimming();
+    }
+
+    private static void Prefix(Character __instance, float dt)
+    {
+        if (!IsControllableSwimmer(__instance))
+        {
+            if (__instance is Player player && (!player.InWater() || player.IsOnGround())) player.m_swimDepth = 1.6f;
+            return;
+        }
+
+        bool diving = IsDivePressed();
+        bool surfacing = IsSurfacePressed();
         if (diving == surfacing) return;
+
+        // Valheim's native swimming controller uses m_swimDepth as its
+        // vertical target. Changing only Rigidbody.velocity gets overwritten
+        // by UpdateSwimming on the next physics step, which is why the old
+        // implementation appeared to do nothing. Drive the native target
+        // first, using the same mechanism as BetterDiving.
+        float direction = diving ? 1f : -1f;
+        float rate = Mathf.Max(0.5f, Plugin.DiveSpeed.Value);
+        __instance.m_swimDepth = Mathf.Clamp(__instance.m_swimDepth + direction * rate * Mathf.Max(dt, Time.fixedDeltaTime), 1.6f, 20f);
+    }
+
+    private static void Postfix(Character __instance, float dt)
+    {
+        if (!IsControllableSwimmer(__instance)) return;
+
+        bool diving = IsDivePressed();
+        bool surfacing = IsSurfacePressed();
+        if (diving == surfacing) return;
+
+        Rigidbody body = __instance.GetComponent<Rigidbody>();
+        if (body == null) return;
 
         float direction = diving ? -1f : 1f;
         float speed = Plugin.DiveSpeed.Value;
-        float dt = Mathf.Max(Time.fixedDeltaTime, 0.001f);
+        float fixedDelta = Mathf.Max(Mathf.Max(dt, Time.fixedDeltaTime), 0.001f);
         Vector3 velocity = body.velocity;
-        velocity.y = Mathf.MoveTowards(velocity.y, direction * speed, speed * 6f * dt);
+        velocity.y = Mathf.MoveTowards(velocity.y, direction * speed, speed * 8f * fixedDelta);
         body.velocity = velocity;
-        if (Plugin.DiveStaminaPerSecond.Value > 0f) player.UseStamina(Plugin.DiveStaminaPerSecond.Value * dt);
+        if (Plugin.DiveStaminaPerSecond.Value > 0f && __instance is Player player)
+            player.UseStamina(Plugin.DiveStaminaPerSecond.Value * fixedDelta);
     }
 }
 
@@ -702,7 +907,11 @@ internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHan
 {
     public void OnPointerClick(PointerEventData eventData)
     {
-        Plugin.DepositDraggedCoins();
+        // Keep the drag-and-drop behavior from CurrencyPocket, but also make
+        // the pocket itself a reliable one-click "deposit all coins" target.
+        // This avoids requiring players to first split a stack or rely on the
+        // small buttons when an inventory layout mod has moved the panel.
+        if (!Plugin.DepositDraggedCoins()) Plugin.DepositInventoryCoins();
     }
 }
 
