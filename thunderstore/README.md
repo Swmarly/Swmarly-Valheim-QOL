@@ -15,9 +15,9 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 - Configurable trash mobs flee on sight.
 - Uncovered structures no longer take rain wear.
 - No stamina cost for hammer, hoe, and cultivator by default; an all-actions mode is available.
-- Multiple players can open the same chest together, using the No-Chest-Block/MultiUserChest open/stack behavior.
+- Multiple players can open the same chest together, using the No-Chest-Block/MultiUserChest open/stack behavior, including wagon inventories.
 - SpeedyPaths-style dirt/stone path and structure movement bonuses, with no running stamina usage on dirt and stone paths by default.
-- Server-side NoAFKRaids behavior: random raids are blocked when all connected players have been stationary for the configured AFK period.
+- Server-side NoAFKRaids behavior: random raids are blocked when an AFK player is within the configured event protection radius; if Valheim does not expose an event position, it safely falls back to blocking only when all connected players are AFK.
 
 ## Installation
 
@@ -25,7 +25,7 @@ Install the package with r2modman/Thunderstore Mod Manager, or extract the conte
 
 For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting, chest sharing, and NoAFKRaids use the server for authority, while equipment-in-water, running hotbar equipment, SpeedyPaths movement, diving, and the currency-pocket UI require the client copy.
 
-The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; click the pocket or use the down arrow to move normal-inventory coins into it, use the up arrow to extract all pocket coins, or drag a coin stack onto the pocket. The panel removes duplicate copies and is positioned from the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
+The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; click the pocket or use the down arrow to move normal-inventory coins into it, use the up arrow to extract all pocket coins, or drag a coin stack onto the pocket. The panel removes duplicate copies and is placed between the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
 
 When updating, remove the old `SwmarlyValheimQOL.dll`/package copy first if your manager leaves duplicate plugin versions behind, then install the new package on both the server and all clients. Do not keep two copies of this mod in different plugin folders.
 
