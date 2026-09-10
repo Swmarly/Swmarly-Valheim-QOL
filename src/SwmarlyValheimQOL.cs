@@ -1547,7 +1547,7 @@ internal static class DivingPatch
     internal static bool IsLocalWaterPlayer(Character character)
     {
         return Plugin.IsFeatureEnabled(Plugin.Diving) && character is Player player &&
-               Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
+               Plugin.IsLocalPlayer(player) && (!player.IsOnGround() || IsDiveGroundContact(player)) && !player.IsDead() &&
                (IsInLiquid(player) || DiveToggle || IsUnderwater || HasDiveTarget(player));
     }
 
@@ -1573,14 +1573,27 @@ internal static class DivingPatch
 
     internal static bool IsActuallyUnderwater(Player player)
     {
-        return player != null && !player.IsOnGround() && !player.IsDead() &&
+        return player != null && (!player.IsOnGround() || IsDiveGroundContact(player)) && !player.IsDead() &&
                player.m_swimDepth > 2.5f &&
+               Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 2.5f;
+    }
+
+    // Valheim's IsOnGround also becomes true when the player is standing on
+    // the seabed. That is not a land/surface reset condition: resetting the
+    // swim target there to 1.6 metres is exactly what launches a diver back to
+    // the surface. Only treat ground contact as valid for an active dive when
+    // the liquid column is genuinely deeper than the dive threshold.
+    internal static bool IsDiveGroundContact(Player player)
+    {
+        return player != null && player.IsOnGround() &&
+               (DiveToggle || IsUnderwater || HasDiveTarget(player)) &&
                Mathf.Max(0f, player.GetLiquidLevel() - player.transform.position.y) > 2.5f;
     }
 
     internal static bool ShouldKeepNativeSwimming(Player player)
     {
-        return player != null && Plugin.IsLocalPlayer(player) && !player.IsOnGround() && !player.IsDead() &&
+        return player != null && Plugin.IsLocalPlayer(player) &&
+               (!player.IsOnGround() || IsDiveGroundContact(player)) && !player.IsDead() &&
                (IsActuallyUnderwater(player) || IsUnderwater || DiveToggle || IsDiveHeld() || IsSurfaceHeld());
     }
 
@@ -1593,7 +1606,7 @@ internal static class DivingPatch
         // The cached liquid-depth value can briefly report false during the
         // transition below the surface; resetting m_swimDepth there restores
         // the vanilla 1.6 target and launches the player back up.
-        if (player.IsOnGround() || player.IsDead())
+        if ((player.IsOnGround() && !IsDiveGroundContact(player)) || player.IsDead())
         {
             DiveToggle = false;
             IsUnderwater = false;
@@ -1666,7 +1679,7 @@ internal static class DivingPatch
     private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player) ||
-            player.IsOnGround() || player.IsDead() || (!IsInLiquid(player) && !player.IsSwimming() && !HasDiveTarget(player) && !IsUnderwater)) return;
+            (player.IsOnGround() && !IsDiveGroundContact(player)) || player.IsDead() || (!IsInLiquid(player) && !player.IsSwimming() && !HasDiveTarget(player) && !IsUnderwater)) return;
 
         bool controllingDepth = DiveToggle || IsDiveHeld() || IsSurfaceHeld();
         if (!controllingDepth) return;
@@ -1696,7 +1709,8 @@ internal static class DivingNativeSwimmingStatePatch
     private static bool Prefix(Character __instance, ref bool __result)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) ||
-            !Plugin.IsLocalPlayer(player) || player.IsOnGround() || player.IsDead())
+            !Plugin.IsLocalPlayer(player) ||
+            (player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
             return true;
 
         if (!DivingPatch.IsUnderwater && !DivingPatch.DiveToggle && !DivingPatch.HasDiveTarget(player))
@@ -1721,7 +1735,8 @@ internal static class DivingInputPatch
     private static void Prefix(Player __instance)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(__instance) ||
-            (!DivingPatch.IsInLiquid(__instance) && !__instance.IsSwimming() && !DivingPatch.IsUnderwater && !DivingPatch.DiveToggle) || __instance.IsOnGround() || __instance.IsDead()) return;
+            (!DivingPatch.IsInLiquid(__instance) && !__instance.IsSwimming() && !DivingPatch.IsUnderwater && !DivingPatch.DiveToggle) ||
+            (__instance.IsOnGround() && !DivingPatch.IsDiveGroundContact(__instance)) || __instance.IsDead()) return;
 
         if (ZInput.GetButtonDown("Crouch") || ZInput.GetButtonDown("JoyCrouch"))
         {
@@ -1746,7 +1761,7 @@ internal static class DivingMotionPatch
     {
         if (__instance is not Player player) return;
         if (!Plugin.IsFeatureEnabled(Plugin.Diving) || !Plugin.IsLocalPlayer(player)) return;
-        if (player.IsOnGround() || player.IsDead())
+        if ((player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead())
         {
             DivingPatch.IsUnderwater = false;
             player.m_swimDepth = 1.6f;
@@ -1785,7 +1800,8 @@ internal static class DivingSwimmingTimerPatch
     private static void Postfix(Character __instance, ref float ___m_lastGroundTouch, ref float ___m_swimTimer)
     {
         if (__instance is not Player player || !Plugin.IsFeatureEnabled(Plugin.Diving) ||
-            !Plugin.IsLocalPlayer(player) || player.IsOnGround() || player.IsDead()) return;
+            !Plugin.IsLocalPlayer(player) ||
+            (player.IsOnGround() && !DivingPatch.IsDiveGroundContact(player)) || player.IsDead()) return;
         if (!DivingPatch.HasDiveTarget(player) && !DivingPatch.IsUnderwater) return;
 
         ___m_lastGroundTouch = 0.3f;
