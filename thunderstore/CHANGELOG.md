@@ -7,6 +7,7 @@
 - Applied the diving camera water override before and after the camera solve, added cultivated-ground SpeedyPaths settings, and made AFK raid protection use active connections and event radius when available.
 
 - Added No-Chest-Block/MultiUserChest-style simultaneous chest opening and stack acknowledgment.
+- Added the reference-style authoritative chest item transaction RPCs for add, remove, move, consume, drop, preview, and rollback handling.
 - Added SpeedyPaths-style ground detection, movement multipliers, and configurable no-stamina dirt/stone paths.
 - Added dedicated-server NoAFKRaids protection based on authoritative player movement positions.
 - Replaced Rigidbody diving with native `m_swimDepth` control, persistent dive state, native timer maintenance, and a post-camera water-clamp override.
