@@ -13,5 +13,9 @@ Swmarly Valheim QOL is a clean reimplementation. It does not ship code or assets
 - RegenWhileSitting — https://www.nexusmods.com/valheim/mods/2486
 - FleeOnSight — https://www.nexusmods.com/valheim/mods/2764
 - Floating Items — https://www.nexusmods.com/valheim/mods/241
+- Better Diving — https://github.com/humansandbag/Valheim-Better-Diving-Mod
+- MultiUserChest / No-Chest-Block — https://github.com/MSchmoecker/No-Chest-Block
+- SpeedyPaths — https://github.com/NNaso/ValheimMods/tree/main/SpeedyPaths
+- NoAFKRaids — https://old.thunderstore.io/c/valheim/p/Dumba/NoAFKRaids/
 
 All feature names and links are provided for attribution and compatibility context. Individual authors retain their own rights and licenses.
