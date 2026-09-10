@@ -738,11 +738,11 @@ internal static class SpeedyPathsState
 
             Heightmap heightmap = ground.GetComponent<Heightmap>();
             Texture2D paintMask = PaintMaskField?.GetValue(heightmap) as Texture2D;
-            Vector3? lastPoint = LastGroundPointField?.GetValue(player) as Vector3?;
-            if (heightmap == null || paintMask == null || !paintMask.isReadable || WorldToVertexMethod == null || !lastPoint.HasValue)
+            object rawLastPoint = LastGroundPointField?.GetValue(player);
+            if (heightmap == null || paintMask == null || !paintMask.isReadable || WorldToVertexMethod == null || rawLastPoint is not Vector3 lastPoint)
                 return QolGroundType.Untamed;
 
-            WorldToVertexArgs[0] = lastPoint.Value;
+            WorldToVertexArgs[0] = lastPoint;
             WorldToVertexArgs[1] = 0;
             WorldToVertexArgs[2] = 0;
             WorldToVertexMethod.Invoke(heightmap, WorldToVertexArgs);
