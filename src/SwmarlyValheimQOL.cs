@@ -1,7 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -17,7 +19,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.1";
+    public const string PluginVersion = "1.0.2";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -62,6 +64,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static GameObject PocketUi;
     internal static Button PocketExtractButton;
     internal static TextMeshProUGUI PocketText;
+    internal static Coroutine PocketUiRepositionCoroutine;
 
     internal static readonly HashSet<long> SleepYes = new();
     internal static readonly HashSet<long> SleepNo = new();
@@ -137,7 +140,7 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static void SetPocketCoins(Player player, int coins)
     {
-        if (player == null) return;
+        if (player == null || player.m_customData == null) return;
         player.m_customData[CoinKey] = Math.Max(0, coins).ToString();
         UpdatePocketUi();
     }
@@ -193,7 +196,8 @@ public sealed class Plugin : BaseUnityPlugin
         PocketUi.name = "SwmarlyValheimQOL_CurrencyPocket";
         RepositionPocketUi(inventoryRoot, armor, weight);
         SetPocketIcon();
-        PocketText = PocketUi.transform.Find("ac_text")?.GetComponent<TextMeshProUGUI>();
+        Transform text = Utils.FindChild(PocketUi.transform, "ac_text");
+        PocketText = text == null ? null : text.GetComponent<TextMeshProUGUI>();
         if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
 
         if (gui.m_takeAllButton != null)
@@ -208,6 +212,31 @@ public sealed class Plugin : BaseUnityPlugin
             PocketExtractButton.onClick = new Button.ButtonClickedEvent();
             PocketExtractButton.onClick.AddListener(ExtractPocketCoins);
         }
+    }
+
+    internal static void SchedulePocketUiReposition(InventoryGui gui)
+    {
+        if (Instance == null || gui == null) return;
+        if (PocketUiRepositionCoroutine != null) Instance.StopCoroutine(PocketUiRepositionCoroutine);
+        PocketUiRepositionCoroutine = Instance.StartCoroutine(RepositionPocketUiAfterLayout(gui));
+    }
+
+    private static IEnumerator RepositionPocketUiAfterLayout(InventoryGui gui)
+    {
+        // Inventory mods commonly move Armor/Weight from their own Show
+        // postfixes. Wait until those postfixes have run before positioning our
+        // clone, then wait one frame more for layout rebuilds.
+        yield return null;
+        yield return new WaitForEndOfFrame();
+        if (gui != null && gui.m_player != null)
+        {
+            Transform armor = gui.m_player.transform.Find("Armor");
+            Transform weight = gui.m_player.transform.Find("Weight");
+            if (armor != null) RepositionPocketUi(gui.m_player.transform, armor, weight);
+            SetPocketIcon();
+            UpdatePocketUi();
+        }
+        PocketUiRepositionCoroutine = null;
     }
 
     private static void RepositionPocketUi(Transform inventoryRoot, Transform armor, Transform weight)
@@ -228,14 +257,30 @@ public sealed class Plugin : BaseUnityPlugin
         // Quick-stack/Jewelcrafting-style layouts move the Armor and Weight
         // rows after InventoryGui.Show. Keep the pocket out of their overlay.
         var plugins = BepInEx.Bootstrap.Chainloader.PluginInfos;
-        if (plugins.ContainsKey("goldenrevolver.quick_stack_store") || plugins.ContainsKey("org.bepinex.plugins.jewelcrafting"))
-            pocketRect.anchoredPosition += new Vector2(0f, -234f);
+        bool expandedInventory = plugins.ContainsKey("goldenrevolver.quick_stack_store") ||
+                                  plugins.ContainsKey("org.bepinex.plugins.jewelcrafting") ||
+                                  plugins.ContainsKey("randyknapp.mods.equipmentandquickslots") ||
+                                  plugins.ContainsKey("Azumatt.AzuExtendedPlayerInventory");
+        if (expandedInventory)
+        {
+            // These inventory layouts add several rows below Armor. This is
+            // the compatibility position used by CurrencyPocket and is far
+            // enough below the armor-number overlay to remain clickable.
+            pocketRect.anchoredPosition = armorRect.anchoredPosition + new Vector2(0f, -234f);
+        }
+        else if (weightRect != null)
+        {
+            // Leave a full icon-height gap from the armor number instead of
+            // putting the coin count directly on the midpoint used by the
+            // vanilla layout.
+            pocketRect.anchoredPosition = new Vector2(armorRect.anchoredPosition.x, (armorRect.anchoredPosition.y + weightRect.anchoredPosition.y) * 0.5f - 45f);
+        }
     }
 
     private static void SetPocketIcon()
     {
         if (PocketUi == null || ObjectDB.instance == null) return;
-        Transform icon = PocketUi.transform.Find("armor_icon");
+        Transform icon = Utils.FindChild(PocketUi.transform, "armor_icon");
         GameObject coins = ObjectDB.instance.GetItemPrefab(CoinPrefab);
         if (icon == null || coins == null) return;
         Image image = icon.GetComponent<Image>();
@@ -252,7 +297,7 @@ internal static class FloatingItemsPatch
         if (!Plugin.IsFeatureEnabled(Plugin.FloatItems)) return;
         GameObject go = __instance.gameObject;
         if (go.GetComponent<Rigidbody>() == null && go.GetComponentInChildren<Rigidbody>() == null) return;
-        if (go.GetComponent<ZNetView>() == null) return;
+        if (go.GetComponent<ZNetView>() == null && go.GetComponentInChildren<ZNetView>() == null) return;
         Floating floating = go.GetComponent<Floating>() ?? go.AddComponent<Floating>();
         floating.m_force = Plugin.FloatForce.Value;
         floating.m_damping = Plugin.FloatDamping.Value;
@@ -282,16 +327,53 @@ internal static class EquipmentInWaterPatch
 [HarmonyPatch(typeof(Player), "UseHotbarItem")]
 internal static class EquipWhileRunningPatch
 {
+    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running") ?? AccessTools.Field(typeof(Character), "m_run");
+
     private static bool Prefix(Player __instance, int index)
     {
-        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || !__instance.IsRunning()) return true;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning)) return true;
+        bool running = __instance.IsRunning();
+        if (!running && Player.m_localPlayer == __instance)
+            running = ZInput.GetButton("Run") || ZInput.GetButton("JoyRun");
+        if (!running) return true;
+
         ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
         if (item == null) return true;
 
-        // Do the hotbar action directly while running. This bypasses any vanilla
-        // movement-state gate added around UseHotbarItem in a game update.
-        __instance.UseItem(__instance.GetInventory(), item, false);
+        // UseItem eventually calls EquipItem. Temporarily clear the private
+        // movement flag for the complete call so both the hotbar entry point
+        // and the equip gate see a legal movement state.
+        bool changedRunning = RunningField != null && (bool)RunningField.GetValue(__instance);
+        if (changedRunning) RunningField.SetValue(__instance, false);
+        try
+        {
+            __instance.UseItem(__instance.GetInventory(), item, false);
+        }
+        finally
+        {
+            if (changedRunning) RunningField.SetValue(__instance, true);
+        }
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "EquipItem")]
+internal static class EquipWhileRunningEquipItemPatch
+{
+    private static readonly FieldInfo RunningField = AccessTools.Field(typeof(Character), "m_running") ?? AccessTools.Field(typeof(Character), "m_run");
+
+    private static void Prefix(Humanoid __instance, ref bool __state)
+    {
+        __state = false;
+        if (!Plugin.IsFeatureEnabled(Plugin.EquipWhileRunning) || __instance is not Player || RunningField == null) return;
+        if (!(bool)RunningField.GetValue(__instance)) return;
+        RunningField.SetValue(__instance, false);
+        __state = true;
+    }
+
+    private static void Postfix(Humanoid __instance, bool __state)
+    {
+        if (__state && RunningField != null) RunningField.SetValue(__instance, true);
     }
 }
 
@@ -301,6 +383,9 @@ internal static class NoStaminaCostsPatch
     private static void Prefix(Player __instance, ref float v)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.NoStaminaCosts) || Plugin.StaminaCostMode.Value <= 0) return;
+        // Negative values are stamina regeneration. Never turn those into
+        // zero, otherwise the all-actions mode also disables regeneration.
+        if (v <= 0f) return;
         if (Plugin.StaminaCostMode.Value >= 2)
         {
             v = 0f;
@@ -319,6 +404,17 @@ internal static class NoRainDamagePatch
 {
     private static void Postfix(WearNTear __instance)
     {
+        if (Plugin.IsFeatureEnabled(Plugin.NoRainDamage)) __instance.m_noRoofWear = false;
+    }
+}
+
+[HarmonyPatch(typeof(WearNTear), "UpdateWear")]
+internal static class NoRainDamageUpdatePatch
+{
+    private static void Prefix(WearNTear __instance)
+    {
+        // Loaded structures may not run Awake again after the config is
+        // enabled. Reapply the flag at the actual wear calculation point.
         if (Plugin.IsFeatureEnabled(Plugin.NoRainDamage)) __instance.m_noRoofWear = false;
     }
 }
@@ -401,15 +497,20 @@ internal static class PlayerQolUpdatePatch
 [HarmonyPatch(typeof(Humanoid), "Pickup")]
 internal static class CurrencyPickupPatch
 {
+    [HarmonyPriority(Priority.LowerThanNormal)]
     private static bool Prefix(Humanoid __instance, GameObject go, bool autoPickupDelay, ref bool __result)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) || __instance is not Player player || go == null || player.IsTeleporting()) return true;
         ItemDrop drop = go.GetComponent<ItemDrop>();
         if (drop == null || drop.m_itemData?.m_shared == null || drop.m_itemData.m_shared.m_name != Plugin.CoinToken) return true;
+        if (drop.m_nview == null || drop.m_nview.GetZDO() == null) return true;
         if (!drop.CanPickup(autoPickupDelay)) return true;
+        if (drop.m_itemData.m_dropPrefab == null && ObjectDB.instance != null)
+            drop.m_itemData.m_dropPrefab = ObjectDB.instance.GetItemPrefab(Utils.GetPrefabName(go));
         int amount = drop.m_itemData.m_stack;
         Plugin.SetPocketCoins(player, Plugin.GetPocketCoins(player) + amount);
         if (ZNetScene.instance != null) ZNetScene.instance.Destroy(go);
+        if (player.m_pickupEffects != null) player.m_pickupEffects.Create(drop.transform.position, Quaternion.identity);
         player.ShowPickupMessage(drop.m_itemData, amount);
         __result = true;
         return false;
@@ -428,10 +529,12 @@ internal static class CurrencyStorePatch
 [HarmonyPatch(typeof(InventoryGui), "Show")]
 internal static class CurrencyUiPatch
 {
+    [HarmonyPriority(Priority.VeryLow)]
     private static void Postfix(InventoryGui __instance)
     {
         if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket)) return;
         Plugin.CreatePocketUi(__instance);
+        Plugin.SchedulePocketUiReposition(__instance);
         Plugin.UpdatePocketUi();
     }
 }
