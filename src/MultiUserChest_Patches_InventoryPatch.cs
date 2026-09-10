@@ -12,9 +12,9 @@ namespace SwmarlyValheimQOL {
         private static readonly WeakReference<ItemDrop.ItemData> LastRemovedItem = new WeakReference<ItemDrop.ItemData>(null);
         private static bool allowItemSwap = true;
 
-        [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int))]
+        [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int), typeof(bool) })]
         [HarmonyPrefix, HarmonyPriority(Priority.VeryLow)]
-        public static void AddItem1Prefix(Inventory __instance, ref bool __runOriginal, ItemDrop.ItemData item, int amount, int x, int y, ref bool __result) {
+        public static void AddItem1Prefix(Inventory __instance, ref bool __runOriginal, ItemDrop.ItemData item, int amount, int x, int y, bool skipValidPositionCheck, ref bool __result) {
             if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return;
             if (!__runOriginal) {
                 return;
@@ -102,7 +102,7 @@ namespace SwmarlyValheimQOL {
             }
         }
 
-        [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int))]
+        [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int), typeof(bool) })]
         [HarmonyWrapSafe]
         [HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> RemoveLogging(IEnumerable<CodeInstruction> instructions) {
