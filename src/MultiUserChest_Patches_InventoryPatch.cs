@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using BepInEx;
 using HarmonyLib;
@@ -102,15 +101,13 @@ namespace SwmarlyValheimQOL {
             }
         }
 
+        // Valheim 1.0 changed the Inventory.AddItem IL. Leave its optional
+        // logging untouched so a missing logging call cannot disable the
+        // entire cross-owner chest transaction patch.
         [HarmonyPatch(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(ItemDrop.ItemData), typeof(int), typeof(int), typeof(int), typeof(bool) })]
-        [HarmonyWrapSafe]
         [HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> RemoveLogging(IEnumerable<CodeInstruction> instructions) {
-            if (!Plugin.IsFeatureEnabled(Plugin.MultiUserChests)) return instructions;
-            return new CodeMatcher(instructions)
-                .MatchForward(false, new CodeMatch(i => i.Calls(AccessTools.Method(typeof(ZLog), nameof(ZLog.Log)))))
-                .SetInstruction(new CodeInstruction(OpCodes.Pop))
-                .Instructions();
+            return instructions;
         }
 
         private static void AssignItemsOfInventory(Inventory inventory) {

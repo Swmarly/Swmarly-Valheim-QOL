@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6
+
+- Fixed multi-user chest routing after networked containers reload by retrying QOL's inventory-owner registration until the container inventory exists.
+- Fixed the Valheim 1.0 Inventory.AddItem Harmony error by removing the version-fragile logging IL rewrite; cross-owner chest transaction patches now register normally.
+
+
 ## 1.0.5
 
 - Removed the non-functional trash-mob fleeing feature instead of shipping a misleading toggle.

@@ -33,6 +33,10 @@ namespace SwmarlyValheimQOL {
                 __instance.m_nview = __instance.m_rootObjectOverride
                     ? __instance.m_rootObjectOverride.GetComponent<ZNetView>()
                     : __instance.GetComponent<ZNetView>();
+
+            // Container inventories can be created after Container.Awake during
+            // networked zone loading. Register again once the inventory exists.
+            ContainerExtend.EnsureRegistered(__instance);
         }
 
         // Keep Valheim's native open/stack RPCs. The old combined patch
