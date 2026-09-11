@@ -1,10 +1,21 @@
 # Changelog
 
+## 1.0.7
+
+- Added an AzuAutoStore compatibility marker so its duplicate MultiUserChest patch layer stays disabled when QOL multi-user chests are enabled.
+
+## 1.0.6
+
+- Fixed multi-user chest routing after networked containers reload by retrying QOL inventory-owner registration until the container inventory exists.
+- Fixed the Valheim 1.0 Inventory.AddItem Harmony error by removing the version-fragile logging IL rewrite; cross-owner chest transaction patches now register normally.
+
+
 ## 1.0.5
 
-- Removed the non-functional trash-mob fleeing feature instead of shipping a misleading toggle.
+- Removed the non-functional trash-mob fleeing feature.
 - Moved the Features section to the top of the config while preserving existing values and removing the obsolete fleeing section.
 - Changed no-stamina mode to exempt only actual hammer, hoe, and cultivator use by default; the previous equipped-tool behavior remains configurable.
+- Removed coin-purse background-click and drag-and-drop depositing; manual transfers now use only the two purse buttons.
 
 - Fixed jumping from very shallow water entering Valheim's swimming state.
 - Added a native swim-state guard and timer boundary so shallow water remains walkable while deep-water diving remains available.

@@ -28,7 +28,7 @@ Install the package with r2modman/Thunderstore Mod Manager, or extract the conte
 
 For a dedicated server, install the package in the server instance's `BepInEx/plugins` directory and start the server once. The config will be created at `BepInEx/config/Swmarly.ValheimQOL.cfg` inside that server instance. In multiplayer, install the same package on every client as well: sleep voting, chest sharing, and NoAFKRaids use the server for authority, while equipment-in-water, running hotbar equipment, SpeedyPaths movement, diving, and the currency-pocket UI require the client copy.
 
-The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; click the pocket or use the down arrow to move normal-inventory coins into it, use the up arrow to extract all pocket coins, or drag a coin stack onto the pocket. The panel removes duplicate copies and is placed between the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
+The currency pocket is a separate coin balance: picked-up coins appear in the pocket and are included in trader totals. Open the inventory after picking up coins; use the down arrow to move normal-inventory coins into it, or use the up arrow to extract all pocket coins. The panel removes duplicate copies and is placed between the final rendered Armor/Weight bounds after expanded-inventory mods finish their UI layout.
 
 When updating, remove the old `SwmarlyValheimQOL.dll`/package copy first if your manager leaves duplicate plugin versions behind, then install the new package on both the server and all clients. Do not keep two copies of this mod in different plugin folders.
 
@@ -55,4 +55,4 @@ This project is an independent reimplementation inspired by the behavior of the 
 
 ## Thunderstore disclosure
 
-The icon was created specifically for this package with generative image tooling; the package should be submitted with Thunderstore's **AI Generated** category selected.
+The icon was created specifically for this package with generative image tooling.

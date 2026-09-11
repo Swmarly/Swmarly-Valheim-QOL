@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using BepInEx;
+using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using HarmonyLib;
 using TMPro;
@@ -17,11 +18,12 @@ using Object = UnityEngine.Object;
 namespace SwmarlyValheimQOL;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+[BepInDependency("Azumatt.AzuAutoStore", BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.5";
+    public const string PluginVersion = "1.0.7";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -123,8 +125,26 @@ public sealed class Plugin : BaseUnityPlugin
         // even when another server plugin changes the available UI surface.
         Config.Save();
         NormalizeConfigFile();
+        RegisterAzuAutoStoreMultiUserChestCompatibility();
         ApplyHarmonyPatches();
         Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
+    }
+
+    private void RegisterAzuAutoStoreMultiUserChestCompatibility()
+    {
+        if (!IsFeatureEnabled(MultiUserChests) ||
+            !Chainloader.PluginInfos.ContainsKey("Azumatt.AzuAutoStore") ||
+            Chainloader.PluginInfos.ContainsKey("com.maxsch.valheim.MultiUserChest"))
+            return;
+
+        // AzuAutoStore uses the official MultiUserChest GUID as its opt-out
+        // marker. QOL implements that protocol itself, so make Azu skip its
+        // duplicate compatibility patches when both mods are installed.
+        if (Chainloader.PluginInfos.TryGetValue(PluginGuid, out PluginInfo pluginInfo))
+        {
+            Chainloader.PluginInfos["com.maxsch.valheim.MultiUserChest"] = pluginInfo;
+            Logger.LogInfo("AzuAutoStore detected; using QOL's multi-user chest implementation.");
+        }
     }
 
     private void ApplyHarmonyPatches()
