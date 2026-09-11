@@ -173,7 +173,7 @@ public sealed class Plugin : BaseUnityPlugin
             foreach (string line in originalLines)
             {
                 string trimmed = line.Trim();
-                bool isHeader = trimmed.Length > 2 && trimmed[0] == '[' && trimmed[^1] == ']';
+                bool isHeader = trimmed.Length > 2 && trimmed[0] == '[' && trimmed[trimmed.Length - 1] == ']';
                 if (isHeader)
                 {
                     if (currentLines != null) sections.Add((currentName, currentLines));
