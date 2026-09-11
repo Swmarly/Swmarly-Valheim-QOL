@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.7
+
+- Added an AzuAutoStore compatibility marker so its duplicate MultiUserChest patch layer stays disabled when QOL multi-user chests are enabled.
+
+## 1.0.6
+
+- Fixed multi-user chest routing after networked containers reload by retrying QOL inventory-owner registration until the container inventory exists.
+- Fixed the Valheim 1.0 Inventory.AddItem Harmony error by removing the version-fragile logging IL rewrite; cross-owner chest transaction patches now register normally.
+
+
 ## 1.0.5
 
 - Removed the non-functional trash-mob fleeing feature.
