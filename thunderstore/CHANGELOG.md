@@ -2,6 +2,10 @@
 
 ## 1.0.5
 
+- Removed the non-functional trash-mob fleeing feature instead of shipping a misleading toggle.
+- Moved the Features section to the top of the config while preserving existing values and removing the obsolete fleeing section.
+- Changed no-stamina mode to exempt only actual hammer, hoe, and cultivator use by default; the previous equipped-tool behavior remains configurable.
+
 - Fixed jumping from very shallow water entering Valheim's swimming state.
 - Added a native swim-state guard and timer boundary so shallow water remains walkable while deep-water diving remains available.
 
