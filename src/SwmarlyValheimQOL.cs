@@ -11,7 +11,6 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using TMPro;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
@@ -403,24 +402,6 @@ public sealed class Plugin : BaseUnityPlugin
         if (deposited > 0) SetPocketCoins(player, GetPocketCoins(player) + deposited);
     }
 
-    internal static bool DepositDraggedCoins()
-    {
-        Player player = Player.m_localPlayer;
-        InventoryGui gui = InventoryGui.m_instance;
-        if (player == null || gui == null || gui.m_dragItem == null || gui.m_dragInventory == null || gui.m_dragAmount <= 0) return false;
-        if (gui.m_dragItem.m_shared == null || gui.m_dragItem.m_shared.m_name != CoinToken) return false;
-
-        int amount = Mathf.Min(gui.m_dragAmount, gui.m_dragItem.m_stack);
-        if (amount <= 0) return false;
-        int before = gui.m_dragItem.m_stack;
-        gui.m_dragInventory.RemoveItem(gui.m_dragItem, amount);
-        int removed = Mathf.Clamp(before - gui.m_dragItem.m_stack, 0, amount);
-        if (removed <= 0) return false;
-        SetPocketCoins(player, GetPocketCoins(player) + removed);
-        gui.SetupDragItem(null, null, 1);
-        return true;
-    }
-
     internal static void CreatePocketUi(InventoryGui gui)
     {
         if (!IsFeatureEnabled(CurrencyPocket) || gui == null) return;
@@ -487,10 +468,6 @@ public sealed class Plugin : BaseUnityPlugin
         }
         PocketUi.SetActive(true);
 
-        CurrencyPocketDropTarget[] targets = PocketUi.GetComponents<CurrencyPocketDropTarget>();
-        if (targets.Length == 0) PocketUi.AddComponent<CurrencyPocketDropTarget>();
-        for (int i = 1; i < targets.Length; ++i) Object.Destroy(targets[i]);
-
         Transform text = Utils.FindChild(PocketUi.transform, "ac_text");
         PocketText = text == null ? null : text.GetComponent<TextMeshProUGUI>();
         if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
@@ -498,7 +475,7 @@ public sealed class Plugin : BaseUnityPlugin
         EnsurePocketButtons(gui);
         RepositionPocketUi(inventoryRoot, armor, weight);
         Graphic pocketGraphic = PocketUi.GetComponent<Graphic>();
-        if (pocketGraphic != null) pocketGraphic.raycastTarget = true;
+        if (pocketGraphic != null) pocketGraphic.raycastTarget = false;
         CanvasGroup pocketCanvas = PocketUi.GetComponent<CanvasGroup>();
         if (pocketCanvas != null) pocketCanvas.blocksRaycasts = true;
         SetPocketIcon();
@@ -514,7 +491,7 @@ public sealed class Plugin : BaseUnityPlugin
 
         if (PocketUi == null)
         {
-            PocketUi = new GameObject(PocketUiName, typeof(RectTransform), typeof(Image), typeof(CurrencyPocketDropTarget));
+            PocketUi = new GameObject(PocketUiName, typeof(RectTransform), typeof(Image));
             PocketUi.transform.SetParent(inventoryRoot, false);
             Image background = PocketUi.GetComponent<Image>();
             background.color = new Color(0.08f, 0.06f, 0.05f, 0.9f);
@@ -534,8 +511,6 @@ public sealed class Plugin : BaseUnityPlugin
         }
 
         PocketUi.SetActive(true);
-        CurrencyPocketDropTarget[] targets = PocketUi.GetComponents<CurrencyPocketDropTarget>();
-        if (targets.Length == 0) PocketUi.AddComponent<CurrencyPocketDropTarget>();
         PocketText = Utils.FindChild(PocketUi.transform, "ac_text")?.GetComponent<TextMeshProUGUI>();
         if (PocketText != null) PocketText.text = GetPocketCoins(Player.m_localPlayer).ToString();
         EnsurePocketButtons(gui);
@@ -2057,27 +2032,6 @@ internal static class CurrencyAutoPickupCapacityPatch
         if (!__result && CurrencyAutoPickupContextPatch.Active && Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) &&
             item?.m_shared != null && item.m_shared.m_name == Plugin.CoinToken)
             __result = true;
-    }
-}
-
-internal sealed class CurrencyPocketDropTarget : MonoBehaviour, IPointerClickHandler, IDropHandler
-{
-    public void OnPointerClick(PointerEventData eventData)
-    {
-        // Valheim's InventoryGrid finishes a drag over UI with a pointer
-        // click, not a Unity drop event. Only treat the click as a deposit
-        // when a coin stack is actually being dragged; the old unconditional
-        // click handler moved the whole inventory stack whenever the pocket
-        // card was merely selected.
-        Plugin.DepositDraggedCoins();
-    }
-
-    public void OnDrop(PointerEventData eventData)
-    {
-        // Some UI layouts raise OnDrop instead of OnPointerClick. The
-        // DepositDraggedCoins guard is idempotent because it clears the drag
-        // item after a successful transfer.
-        Plugin.DepositDraggedCoins();
     }
 }
 
