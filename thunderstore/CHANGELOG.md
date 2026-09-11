@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.7
+
+- Added an AzuAutoStore compatibility marker so its duplicate MultiUserChest patch layer stays disabled when QOL's multi-user chest feature is enabled.
+
+
+
 ## 1.0.6
 
 - Fixed multi-user chest routing after networked containers reload by retrying QOL's inventory-owner registration until the container inventory exists.

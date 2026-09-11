@@ -1,6 +1,6 @@
 {
   "name": "SwmarlyValheimQOL",
-  "version_number": "1.0.6",
+  "version_number": "1.0.7",
   "website_url": "https://github.com/Swmarly/Swmarly-Valheim-QOL",
   "description": "Configurable Valheim 1.0 QOL mod: floating items, water equipment, sleep voting, coin pocket, diving, running hotbar equipment, sitting regen, tree replanting, auto-repair, eternal fires, no-rain wear, and no-stamina building.",
   "dependencies": [
