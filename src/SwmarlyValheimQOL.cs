@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -34,7 +35,6 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> Diving;
     internal static ConfigEntry<bool> SneakSpeed;
     internal static ConfigEntry<bool> SitRegeneration;
-    internal static ConfigEntry<bool> FleeOnSight;
     internal static ConfigEntry<bool> NoRainDamage;
     internal static ConfigEntry<bool> NoStaminaCosts;
     internal static ConfigEntry<bool> MultiUserChests;
@@ -56,8 +56,8 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> SwimSprint;
     internal static ConfigEntry<KeyboardShortcut> DiveKey;
     internal static ConfigEntry<KeyboardShortcut> SurfaceKey;
-    internal static ConfigEntry<string> FleeMobNames;
     internal static ConfigEntry<int> StaminaCostMode;
+    internal static ConfigEntry<bool> LegacyEquippedToolNoStamina;
     internal static ConfigEntry<float> PathSensorInterval;
     internal static ConfigEntry<float> DirtPathSpeed;
     internal static ConfigEntry<float> StonePathSpeed;
@@ -123,6 +123,7 @@ public sealed class Plugin : BaseUnityPlugin
         // This guarantees a config is created on a headless dedicated server
         // even when another server plugin changes the available UI surface.
         Config.Save();
+        NormalizeConfigFile();
         ApplyHarmonyPatches();
         Logger.LogInfo($"{PluginName} {PluginVersion} loaded for Valheim 1.0 in process '{Process.GetCurrentProcess().ProcessName}'.");
     }
@@ -156,6 +157,85 @@ public sealed class Plugin : BaseUnityPlugin
         Instance?.Logger.LogWarning(message);
     }
 
+    private void NormalizeConfigFile()
+    {
+        try
+        {
+            string path = Config.ConfigFilePath;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+
+            string[] originalLines = File.ReadAllLines(path);
+            var prefix = new List<string>();
+            var sections = new List<(string Name, List<string> Lines)>();
+            string currentName = null;
+            List<string> currentLines = null;
+
+            foreach (string line in originalLines)
+            {
+                string trimmed = line.Trim();
+                bool isHeader = trimmed.Length > 2 && trimmed[0] == '[' && trimmed[^1] == ']';
+                if (isHeader)
+                {
+                    if (currentLines != null) sections.Add((currentName, currentLines));
+                    currentName = trimmed.Substring(1, trimmed.Length - 2).Trim();
+                    currentLines = new List<string> { line };
+                }
+                else if (currentLines == null)
+                {
+                    prefix.Add(line);
+                }
+                else
+                {
+                    currentLines.Add(line);
+                }
+            }
+
+            if (currentLines != null) sections.Add((currentName, currentLines));
+
+            List<string> featureLines = null;
+            bool changed = false;
+            var ordered = new List<string>(originalLines.Length);
+            ordered.AddRange(prefix);
+
+            foreach ((string Name, List<string> Lines) section in sections)
+            {
+                if (section.Name.Equals("Features", StringComparison.OrdinalIgnoreCase))
+                {
+                    featureLines = section.Lines;
+                    continue;
+                }
+
+                if (section.Name.Equals("Flee on sight", StringComparison.OrdinalIgnoreCase))
+                {
+                    changed = true;
+                    continue;
+                }
+            }
+
+            if (featureLines != null)
+            {
+                ordered.AddRange(featureLines);
+                changed |= sections.Count > 0 && !sections[0].Name.Equals("Features", StringComparison.OrdinalIgnoreCase);
+            }
+
+            foreach ((string Name, List<string> Lines) section in sections)
+            {
+                if (section.Name.Equals("Features", StringComparison.OrdinalIgnoreCase) ||
+                    section.Name.Equals("Flee on sight", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                ordered.AddRange(section.Lines);
+            }
+
+            if (changed && !ordered.SequenceEqual(originalLines))
+                File.WriteAllLines(path, ordered);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning($"Could not normalize the QOL config section order: {exception.Message}");
+        }
+    }
+
     private void BindConfig()
     {
         FloatItems = Config.Bind("Features", "Float dropped items", true, "Make dropped items use Valheim's native floating physics in water.");
@@ -167,9 +247,8 @@ public sealed class Plugin : BaseUnityPlugin
         Diving = Config.Bind("Features", "Diving", true, "Allow controlled diving and surfacing while swimming.");
         SneakSpeed = Config.Bind("Features", "Sneak speed scaling", true, "Scale sneak speed with the Sneak skill.");
         SitRegeneration = Config.Bind("Features", "Regenerate while sitting", true, "Regenerate a small amount of health while sitting.");
-        FleeOnSight = Config.Bind("Features", "Trash mobs flee on sight", true, "Make configured low-tier mobs flee instead of attacking on sight.");
         NoRainDamage = Config.Bind("Features", "No rain damage", true, "Prevent uncovered structures from taking rain wear while preserving support wear.");
-        NoStaminaCosts = Config.Bind("Features", "No stamina costs", true, "Remove stamina costs from building tools by default.");
+        NoStaminaCosts = Config.Bind("Features", "No stamina costs", true, "Remove stamina costs from hammer, hoe, and cultivator actions.");
         MultiUserChests = Config.Bind("Features", "Allow multiple users in chests", true, "Remove the vanilla chest-in-use block so multiple players can open a chest together.");
         SpeedyPaths = Config.Bind("Features", "Speedy paths", true, "Apply SpeedyPaths-style movement bonuses to paths and common building surfaces.");
         NoStaminaOnPaths = Config.Bind("Features", "No stamina on paths", true, "Remove running stamina drain while standing on a dirt or stone path.");
@@ -195,8 +274,8 @@ public sealed class Plugin : BaseUnityPlugin
 
         SneakSpeedMultiplier = Config.Bind("Sneak", "Maximum sneak speed multiplier", 1.5f, new ConfigDescription("Multiplier at 100 Sneak skill.", new AcceptableValueRange<float>(0.5f, 3f)));
         SitHealPerSecond = Config.Bind("Sitting regeneration", "Health per second", 1f, new ConfigDescription("Health restored per second while sitting.", new AcceptableValueRange<float>(0f, 20f)));
-        FleeMobNames = Config.Bind("Flee on sight", "Mob name fragments", "Greyling,Neck,Greydwarf", "Comma-separated prefab/name fragments that should flee on sight.");
-        StaminaCostMode = Config.Bind("No stamina costs", "Mode", 1, new ConfigDescription("0 = disabled, 1 = hammer/hoe/cultivator, 2 = all stamina actions.", new AcceptableValueRange<int>(0, 2)));
+        StaminaCostMode = Config.Bind("No stamina costs", "Mode", 1, new ConfigDescription("0 = disabled, 1 = tool-use stamina only, 2 = all stamina actions.", new AcceptableValueRange<int>(0, 2)));
+        LegacyEquippedToolNoStamina = Config.Bind("No stamina costs", "Legacy no stamina while holding tool", false, "Restore the previous behavior where holding a hammer, hoe, or cultivator also removes movement and running stamina costs.");
         PathSensorInterval = Config.Bind("Speedy paths", "Ground sensor interval", 0.25f, new ConfigDescription("Seconds between ground-material checks for the local player.", new AcceptableValueRange<float>(0.05f, 2f)));
         DirtPathSpeed = Config.Bind("Speedy paths", "Dirt path speed", 1.15f, new ConfigDescription("Movement multiplier on dirt paths.", new AcceptableValueRange<float>(0.1f, 3f)));
         StonePathSpeed = Config.Bind("Speedy paths", "Stone path speed", 1.4f, new ConfigDescription("Movement multiplier on stone paths.", new AcceptableValueRange<float>(0.1f, 3f)));
@@ -1099,16 +1178,22 @@ internal static class NoStaminaCostsPatch
         // Negative values are stamina regeneration. Never turn those into
         // zero, otherwise the all-actions mode also disables regeneration.
         if (v <= 0f) return;
+
         if (Plugin.StaminaCostMode.Value >= 2)
         {
             v = 0f;
             return;
         }
-        ItemDrop.ItemData right = __instance.GetRightItem();
-        ItemDrop.ItemData left = __instance.GetLeftItem();
-        string rightName = right?.m_shared?.m_name ?? string.Empty;
-        string leftName = left?.m_shared?.m_name ?? string.Empty;
-        if (rightName is "$item_hammer" or "$item_hoe" or "$item_cultivator" || leftName is "$item_hammer" or "$item_hoe" or "$item_cultivator") v = 0f;
+
+        if (!NoStaminaToolUseScopePatch.IsToolEquipped(__instance))
+            return;
+
+        // The legacy option intentionally keeps the old broad behavior. The
+        // default path requires an actual hammer/hoe/cultivator action scope,
+        // so holding one while running cannot remove movement stamina.
+        if (Plugin.LegacyEquippedToolNoStamina.Value ||
+            NoStaminaToolUseScopePatch.IsActive(__instance))
+            v = 0f;
     }
 }
 
@@ -1457,24 +1542,6 @@ internal static class NoRainDamageUpdatePatch
         // Loaded structures may not run Awake again after the config is
         // enabled. Reapply the flag at the actual wear calculation point.
         if (Plugin.IsFeatureEnabled(Plugin.NoRainDamage)) __instance.m_noRoofWear = false;
-    }
-}
-
-[HarmonyPatch(typeof(MonsterAI), "Awake")]
-internal static class FleeOnSightPatch
-{
-    private static void Postfix(MonsterAI __instance)
-    {
-        if (!Plugin.IsFeatureEnabled(Plugin.FleeOnSight)) return;
-        string name = __instance.name.ToLowerInvariant();
-        foreach (string configured in Plugin.FleeMobNames.Value.Split(','))
-        {
-            if (!string.IsNullOrWhiteSpace(configured) && name.Contains(configured.Trim().ToLowerInvariant()))
-            {
-                __instance.m_fleeIfNotAlerted = true;
-                return;
-            }
-        }
     }
 }
 
