@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.5
+
+- Fixed jumping from very shallow water entering Valheim's swimming state.
+- Added a native swim-state guard and timer boundary so shallow water remains walkable while deep-water diving remains available.
+
 ## 1.0.4
 
 - Fixed dedicated-server chest opening by preserving Valheim's native open RPC and disabling only the in-use rejection for supported containers.
@@ -10,7 +15,7 @@
 
 - Added configurable eternal fuel for native campfires, hearths, braziers, torches, and other `Fireplace` pieces using the synchronized ZDO fuel value.
 - Added server-authoritative stump-to-sapling replanting with exact mappings for the supported vanilla tree types; no random or mismatched saplings are selected.
-- Added native workbench auto-repair for every item the current station can repair, including armor, tools, weapons, bows, and shields.
+- Added native workbench auto-repair for every item the opened crafting station can repair, including armor, tools, weapons, bows, and shields.
 - Kept the package at version 1.0.3 and kept BepInExPack Valheim as the only dependency.
 
 - Audit pass against the current SleepSkip, Use Equipment in Water, EquipGearWhileRunning, VikingsDoSwim/BetterDiving, CurrencyPocket, SpeedyPaths, MultiUserChest, NoAFKRaids, and NoRainDamage implementations.
