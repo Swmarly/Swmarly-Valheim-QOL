@@ -18,6 +18,11 @@ internal static class NoStaminaToolUseScopePatch
         "UseItem",
         "UseItemSwitch",
         "Attack",
+        // Player.UpdatePlacement owns the actual hammer/hoe/cultivator
+        // stamina call in Valheim. The call happens after PlacePiece,
+        // RemovePiece, or Repair returns, so those helpers alone are too
+        // narrow to keep the scope alive until UseStamina is reached.
+        "UpdatePlacement",
         "PlacePiece",
         "RemovePiece",
         "Repair",
