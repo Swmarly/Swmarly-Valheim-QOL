@@ -2231,7 +2231,7 @@ internal static class CurrencyStorePurchasePatch
         int stack = Mathf.Min(___m_selectedItem.m_stack, ___m_selectedItem.m_prefab.m_itemData.m_shared.m_maxStackSize);
         int quality = ___m_selectedItem.m_prefab.m_itemData.m_quality;
         int variant = ___m_selectedItem.m_prefab.m_itemData.m_variant;
-        if (inventory.AddItem(___m_selectedItem.m_prefab.name, stack, quality, variant, 0L, "") == null)
+        if (inventory.AddItem(___m_selectedItem.m_prefab.name, stack, quality, variant, 0L, "", new Vector2i(-1, -1), false) == null)
             return false;
 
         int inventorySpend = Mathf.Min(inventoryCoins, ___m_selectedItem.m_price);
