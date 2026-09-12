@@ -14,9 +14,10 @@ One optimized BepInEx plugin containing the quality-of-life changes used by Swma
 - Health regeneration while sitting.
 - Configurable trash mobs flee on sight.
 - Uncovered structures no longer take rain wear.
-- No stamina cost for hammer, hoe, and cultivator by default; an all-actions mode is available.
+- No stamina cost for hammer, hoe, and cultivator use by default; holding a tool does not remove stamina costs from running or other activities, and an all-actions mode is available.
 - Configurable eternal fuel for native campfires, hearths, braziers, torches, and other configured `Fireplace` pieces. The server maintains the synchronized fuel value, so the light stays lit for every player.
 - Configurable automatic replanting for supported tree stumps. The default mappings replant Beech, Fir, Pine, Birch, and Oak with their matching saplings; custom `stump=sapling` mappings are supported for compatible tree mods.
+- Configurable automatic stump removal after felling a tree. It uses Valheim's native stump destruction path so the stump's normal log drops are preserved, and it works with automatic replanting.
 - Configurable automatic repair when a workbench/crafting station is open. It uses Valheim's native repair eligibility checks and repairs every eligible weapon, tool, armor, bow, shield, and normal durability item the station can handle.
 - Multiple players can open and interact with the same chest together, including wagon inventories. Chest item moves are routed through an authoritative server-owner transaction layer so simultaneous moves are accepted or rejected without client-side duplicate inventories.
 - SpeedyPaths-style dirt/stone path and structure movement bonuses, with no running stamina usage on dirt and stone paths by default.
@@ -38,10 +39,13 @@ The new settings are created in `BepInEx/config/Swmarly.ValheimQOL.cfg`:
 
 - `Features / Eternal fires and lights`
 - `Features / Automatically replant trees`
+- `Features / Automatically remove tree stumps`
 - `Features / Auto repair at workbenches`
 - `Eternal fires and lights / Prefab names` controls exactly which native or compatible `Fireplace` prefab names stay fueled.
 - `Automatic tree replanting / Stump to sapling mappings` controls the exact stump-to-sapling pairs. The feature never chooses a random tree.
 - `Automatic tree replanting / Replant delay seconds` controls the server-side spawn delay.
+
+Automatic stump removal is enabled by default. Disable `Features / Automatically remove tree stumps` if you want to leave stumps in the world; manual stump destruction can still trigger automatic replanting when that feature is enabled.
 
 Do not install duplicate copies of the individual mods at the same time. Their overlapping patches can cancel each other out.
 
