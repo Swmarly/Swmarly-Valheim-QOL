@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.8
+
+- Fixed trader purchases to debit the currency pocket, including purchases paid partly from inventory coins and partly from the pocket.
+- Fixed hammer, hoe, and cultivator stamina handling so only the actual tool-use action is free; holding a tool no longer removes movement stamina costs.
+- Hardened SpeedyPaths for multiplayer by updating only the local player after physics ground contact and ignoring nearby player colliders.
+- Added enabled-by-default automatic tree-stump removal. Native stump destruction is preserved so normal log drops still spawn, and automatic replanting remains server-authoritative and compatible.
+
 ## 1.0.7
 
 - Added an AzuAutoStore compatibility marker so its duplicate MultiUserChest patch layer stays disabled when QOL multi-user chests are enabled.
