@@ -23,7 +23,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "Swmarly.ValheimQOL";
     public const string PluginName = "Swmarly Valheim QOL";
-    public const string PluginVersion = "1.0.7";
+    public const string PluginVersion = "1.0.8";
     internal static Plugin Instance;
     internal static readonly Harmony Harmony = new(PluginGuid);
 
@@ -44,6 +44,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> NoAfkRaids;
     internal static ConfigEntry<bool> EternalFires;
     internal static ConfigEntry<bool> AutoReplantTrees;
+    internal static ConfigEntry<bool> AutoRemoveTreeStumps;
     internal static ConfigEntry<bool> AutoRepairAtWorkbench;
 
     internal static ConfigEntry<float> FloatForce;
@@ -274,6 +275,7 @@ public sealed class Plugin : BaseUnityPlugin
         NoAfkRaids = Config.Bind("Features", "No AFK raids", true, "Prevent random raids while all connected players have been stationary for the configured AFK period.");
         EternalFires = Config.Bind("Features", "Eternal fires and lights", true, "Keep configured fireplaces and lights at full fuel without refueling.");
         AutoReplantTrees = Config.Bind("Features", "Automatically replant trees", true, "Plant the matching sapling after a supported tree stump is destroyed.");
+        AutoRemoveTreeStumps = Config.Bind("Features", "Automatically remove tree stumps", true, "Destroy the stump after a tree is felled and preserve the stump's normal drops. Automatic replanting still runs when enabled.");
         AutoRepairAtWorkbench = Config.Bind("Features", "Auto repair at workbenches", true, "Repair every item the opened crafting station can repair.");
 
         FloatForce = Config.Bind("Floating items", "Buoyancy force", 0.5f, new ConfigDescription("Native Floating force applied below the surface.", new AcceptableValueRange<float>(0.05f, 3f)));
@@ -926,8 +928,32 @@ internal static class EternalFireSetFuelPatch
 internal static class AutoReplantState
 {
     private const string ReplantScheduledKey = "SwmarlyValheimQOL_ReplantScheduled";
+    private const string StumpAutoRemovedKey = "SwmarlyValheimQOL_StumpAutoRemoved";
     private static readonly HashSet<int> PendingInstances = new();
+    private static readonly HashSet<int> PendingStumpRemovals = new();
     private static readonly HashSet<string> WarnedNames = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static void OnTreeFelled(TreeBase tree)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.AutoRemoveTreeStumps) || tree == null ||
+            ZNet.instance == null || ZNetScene.instance == null || Plugin.Instance == null)
+            return;
+
+        // TreeBase.SpawnLog is reached only by the tree's owner. Keep this
+        // guard anyway because a client can observe the same local method on
+        // a few older Valheim network builds.
+        ZNetView treeView = tree.GetComponent<ZNetView>();
+        if (treeView != null && !treeView.IsOwner()) return;
+
+        GameObject stubPrefab = AccessTools.Field(typeof(TreeBase), "m_stubPrefab")?.GetValue(tree) as GameObject;
+        string stumpPrefabName = NormalizeName(stubPrefab != null ? Utils.GetPrefabName(stubPrefab) : string.Empty);
+        if (stumpPrefabName.Length == 0) return;
+
+        int treeInstanceId = tree.GetInstanceID();
+        if (!PendingStumpRemovals.Add(treeInstanceId)) return;
+        Vector3 position = tree.transform.position;
+        Plugin.Instance.StartCoroutine(RemoveSpawnedStumpNextFrame(stumpPrefabName, position, treeInstanceId));
+    }
 
     internal static void OnStumpDestroyed(Destructible destructible)
     {
@@ -1018,9 +1044,76 @@ internal static class AutoReplantState
         ZNetScene.instance.SpawnObject(position, rotation, prefab);
     }
 
+    private static IEnumerator RemoveSpawnedStumpNextFrame(string stumpPrefabName, Vector3 position, int treeInstanceId)
+    {
+        // TreeBase.Instantiate creates the stub at the end of SpawnLog. Wait a
+        // frame so its ZNetView, Destructible, and DropOnDestroyed callbacks
+        // have all completed Awake/Start before we destroy it.
+        yield return null;
+        PendingStumpRemovals.Remove(treeInstanceId);
+
+        if (!Plugin.IsFeatureEnabled(Plugin.AutoRemoveTreeStumps) ||
+            ZNet.instance == null || ZNetScene.instance == null)
+            yield break;
+
+        Destructible stump = FindNearbyStump(stumpPrefabName, position);
+        if (stump == null) yield break;
+
+        ZNetView nview = stump.GetComponent<ZNetView>() ?? stump.GetComponentInParent<ZNetView>();
+        if (nview != null && !nview.IsOwner()) yield break;
+
+        ZDO zdo = nview?.GetZDO();
+        if (zdo != null)
+        {
+            if (zdo.GetBool(StumpAutoRemovedKey)) yield break;
+            zdo.Set(StumpAutoRemovedKey, true);
+        }
+
+        // Calling the native Destructible.Destroy is important: stump
+        // DropOnDestroyed is subscribed to m_onDestroyed and creates the
+        // normal log drops. The existing Destroy prefix then schedules the
+        // configured sapling on this same authoritative owner.
+        stump.Destroy();
+    }
+
+    private static Destructible FindNearbyStump(string stumpPrefabName, Vector3 position)
+    {
+        Destructible best = null;
+        float bestDistance = float.MaxValue;
+        Collider[] colliders = Physics.OverlapSphere(position, 2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        foreach (Collider collider in colliders)
+        {
+            Destructible candidate = collider.GetComponentInParent<Destructible>();
+            if (candidate == null || !candidate.gameObject.activeInHierarchy) continue;
+
+            string candidateName = NormalizeName(Utils.GetPrefabName(candidate.gameObject));
+            if (!candidateName.Equals(stumpPrefabName, StringComparison.OrdinalIgnoreCase) &&
+                !candidateName.StartsWith(stumpPrefabName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            float distance = (candidate.transform.position - position).sqrMagnitude;
+            if (distance < bestDistance)
+            {
+                best = candidate;
+                bestDistance = distance;
+            }
+        }
+
+        return best;
+    }
+
     private static string NormalizeName(string name)
     {
         return (name ?? string.Empty).Replace("(Clone)", string.Empty).Trim();
+    }
+}
+
+[HarmonyPatch(typeof(TreeBase), "SpawnLog")]
+internal static class AutoRemoveTreeStumpPatch
+{
+    private static void Postfix(TreeBase __instance)
+    {
+        AutoReplantState.OnTreeFelled(__instance);
     }
 }
 
@@ -1209,20 +1302,35 @@ internal static class SpeedyPathsState
     private static readonly MethodInfo WorldToVertexMethod = AccessTools.Method(typeof(Heightmap), "WorldToVertex");
     private static readonly object[] WorldToVertexArgs = { Vector3.zero, 0, 0 };
     private static readonly int PieceLayer = LayerMask.NameToLayer("piece");
+    private static readonly int GroundMask = LayerMask.GetMask("Default", "piece", "piece_nonsolid", "terrain", "static_solid", "vehicle");
 
     private static float sensorTimer;
     private static QolGroundType cachedGroundType;
+    private static Player cachedPlayer;
     internal static float ActiveSpeedMultiplier { get; private set; } = 1f;
     internal static float ActiveStaminaMultiplier { get; private set; } = 1f;
 
     internal static void Update(Player player)
     {
         bool pathFeatureActive = Plugin.IsFeatureEnabled(Plugin.SpeedyPaths) || Plugin.IsFeatureEnabled(Plugin.NoStaminaOnPaths);
-        if (!pathFeatureActive || !Plugin.IsLocalPlayer(player) || player.IsDead())
+        if (!Plugin.IsLocalPlayer(player))
+            return;
+
+        if (!pathFeatureActive || player.IsDead())
         {
+            cachedPlayer = null;
+            sensorTimer = 0f;
+            cachedGroundType = QolGroundType.Untamed;
             ActiveSpeedMultiplier = 1f;
             ActiveStaminaMultiplier = 1f;
             return;
+        }
+
+        if (cachedPlayer != player)
+        {
+            cachedPlayer = player;
+            sensorTimer = 0f;
+            cachedGroundType = QolGroundType.Untamed;
         }
 
         sensorTimer -= Time.fixedDeltaTime;
@@ -1272,8 +1380,8 @@ internal static class SpeedyPathsState
     {
         try
         {
-            Collider ground = player.GetLastGroundCollider();
-            if (ground == null) return QolGroundType.Untamed;
+            if (!TryGetGround(player, out Collider ground, out Vector3 groundPoint))
+                return QolGroundType.Untamed;
 
             if (ground.gameObject.layer == PieceLayer)
             {
@@ -1297,11 +1405,10 @@ internal static class SpeedyPathsState
             // colliders that are not Heightmap-owned this used to throw every
             // sensor tick, so paths silently fell back to Untamed.
             Texture2D paintMask = PaintMaskField.GetValue(heightmap) as Texture2D;
-            object rawLastPoint = LastGroundPointField?.GetValue(player);
-            if (paintMask == null || !paintMask.isReadable || rawLastPoint is not Vector3 lastPoint)
+            if (paintMask == null || !paintMask.isReadable)
                 return QolGroundType.Untamed;
 
-            WorldToVertexArgs[0] = lastPoint;
+            WorldToVertexArgs[0] = groundPoint;
             WorldToVertexArgs[1] = 0;
             WorldToVertexArgs[2] = 0;
             WorldToVertexMethod.Invoke(heightmap, WorldToVertexArgs);
@@ -1328,12 +1435,44 @@ internal static class SpeedyPathsState
         }
         return QolGroundType.Untamed;
     }
+
+    private static bool TryGetGround(Player player, out Collider ground, out Vector3 groundPoint)
+    {
+        ground = player.GetLastGroundCollider();
+        if (IsGroundCollider(ground))
+        {
+            object rawLastPoint = LastGroundPointField?.GetValue(player);
+            groundPoint = rawLastPoint is Vector3 lastPoint ? lastPoint : player.transform.position;
+            return true;
+        }
+
+        // GetLastGroundCollider can briefly report another character when
+        // players overlap. A masked raycast ignores character layers and
+        // reacquires the actual terrain/piece under this local player.
+        Vector3 origin = player.transform.position + Vector3.up * 0.35f;
+        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 3f, GroundMask, QueryTriggerInteraction.Ignore))
+        {
+            ground = hit.collider;
+            groundPoint = hit.point;
+            return true;
+        }
+
+        groundPoint = player.transform.position;
+        return false;
+    }
+
+    private static bool IsGroundCollider(Collider collider)
+    {
+        if (collider == null) return false;
+        int layer = collider.gameObject.layer;
+        return layer == PieceLayer || (GroundMask & (1 << layer)) != 0;
+    }
 }
 
 [HarmonyPatch(typeof(Player), "FixedUpdate")]
 internal static class SpeedyPathsUpdatePatch
 {
-    private static void Prefix(Player __instance)
+    private static void Postfix(Player __instance)
     {
         SpeedyPathsState.Update(__instance);
     }
@@ -2064,6 +2203,51 @@ internal static class CurrencyStorePatch
     }
 }
 
+[HarmonyPatch(typeof(StoreGui), "BuySelectedItem")]
+internal static class CurrencyStorePurchasePatch
+{
+    private static bool Prefix(StoreGui __instance, Trader.TradeItem ___m_selectedItem,
+        Trader ___m_trader, EffectList ___m_buyEffects)
+    {
+        if (!Plugin.IsFeatureEnabled(Plugin.CurrencyPocket) || Player.m_localPlayer == null ||
+            ___m_selectedItem == null || ___m_trader == null)
+            return true;
+
+        Player player = Player.m_localPlayer;
+        Inventory inventory = player.GetInventory();
+        int inventoryCoins = inventory.CountItems(Plugin.CoinToken);
+        int pocketCoins = Plugin.GetPocketCoins(player);
+
+        // Native Valheim already debits inventory coins correctly. Intercept
+        // only purchases that actually need the pocket, keeping other trader
+        // mods' normal BuySelectedItem behavior untouched.
+        if (___m_selectedItem.m_price <= inventoryCoins || pocketCoins <= 0)
+            return true;
+
+        int totalCoins = inventoryCoins + pocketCoins;
+        if (___m_selectedItem.m_price > totalCoins)
+            return false;
+
+        int stack = Mathf.Min(___m_selectedItem.m_stack, ___m_selectedItem.m_prefab.m_itemData.m_shared.m_maxStackSize);
+        int quality = ___m_selectedItem.m_prefab.m_itemData.m_quality;
+        int variant = ___m_selectedItem.m_prefab.m_itemData.m_variant;
+        if (inventory.AddItem(___m_selectedItem.m_prefab.name, stack, quality, variant, 0L, "") == null)
+            return false;
+
+        int inventorySpend = Mathf.Min(inventoryCoins, ___m_selectedItem.m_price);
+        if (inventorySpend > 0)
+            inventory.RemoveItem(Plugin.CoinToken, inventorySpend);
+        Plugin.SetPocketCoins(player, pocketCoins - (___m_selectedItem.m_price - inventorySpend));
+
+        ___m_trader.OnBought(___m_selectedItem);
+        ___m_buyEffects?.Create(__instance.transform.position, Quaternion.identity, null, 1f);
+        player.ShowPickupMessage(___m_selectedItem.m_prefab.m_itemData, ___m_selectedItem.m_prefab.m_itemData.m_stack);
+        AccessTools.Method(typeof(StoreGui), "FillList")?.Invoke(__instance, null);
+        Gogan.LogEvent("Game", "BoughtItem", ___m_selectedItem.m_prefab.name, 0L);
+        return false;
+    }
+}
+
 [HarmonyPatch(typeof(InventoryGui), "Show")]
 internal static class CurrencyUiPatch
 {
@@ -2307,4 +2491,3 @@ internal static class SleepSkipPatch
         return false;
     }
 }
-
