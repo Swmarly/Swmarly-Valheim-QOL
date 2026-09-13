@@ -1,3 +1,5 @@
+// Registers chest request/response RPC names and hooks container lifecycle
+// events needed by the multi-user transaction layer.
 using HarmonyLib;
 
 namespace SwmarlyValheimQOL {

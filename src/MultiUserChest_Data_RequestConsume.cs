@@ -1,3 +1,4 @@
+// Identifies a food/potion slot for an authoritative consume operation.
 namespace SwmarlyValheimQOL {
     public class RequestConsume : IPackage {
         public readonly int itemPosX;
@@ -29,4 +30,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

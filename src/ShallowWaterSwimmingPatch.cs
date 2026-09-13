@@ -1,3 +1,5 @@
+// Multiplayer-safe shallow-water swim eligibility correction. It only changes
+// the local player's native movement decision and never edits remote player state.
 using HarmonyLib;
 using UnityEngine;
 

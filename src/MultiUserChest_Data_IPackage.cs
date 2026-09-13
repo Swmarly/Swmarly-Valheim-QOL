@@ -1,3 +1,4 @@
+// Common wire-format contract for the multi-user chest protocol.
 namespace SwmarlyValheimQOL {
     public interface IPackage {
         ZPackage WriteToPackage();
@@ -7,4 +8,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

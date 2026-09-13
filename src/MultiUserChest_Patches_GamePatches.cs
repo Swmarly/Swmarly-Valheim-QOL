@@ -1,3 +1,5 @@
+// Game lifecycle hooks: install the protocol's network registrations once the
+// Valheim world and its ZNet peer are available.
 using HarmonyLib;
 
 namespace SwmarlyValheimQOL {

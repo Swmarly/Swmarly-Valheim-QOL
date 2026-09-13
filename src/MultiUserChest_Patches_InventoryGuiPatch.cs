@@ -1,3 +1,5 @@
+// InventoryGui integration. It redirects chest-facing UI actions into the
+// request/preview protocol while preserving native player-inventory behavior.
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;

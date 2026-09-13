@@ -1,3 +1,5 @@
+// Inventory serialization and transfer helpers. These preserve item metadata
+// while keeping client previews separate from server-owned item instances.
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;

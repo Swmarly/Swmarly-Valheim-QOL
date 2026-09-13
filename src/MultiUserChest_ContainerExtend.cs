@@ -1,3 +1,5 @@
+// Multi-user chest lifecycle state. This component keeps the authoritative
+// container wrapper attached to the Unity object while Valheim reloads ZDOs.
 using System.Runtime.CompilerServices;
 using UnityEngine;
 

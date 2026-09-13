@@ -1,3 +1,5 @@
+// Client-facing chest operations. Each action becomes a server request so
+// the local UI never treats a speculative inventory edit as authoritative.
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -107,4 +109,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

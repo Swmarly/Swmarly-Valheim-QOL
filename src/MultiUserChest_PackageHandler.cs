@@ -1,3 +1,5 @@
+// Request-ID registry for the asynchronous chest protocol. Entries are removed
+// after response/timeout so reconnects cannot consume stale transactions.
 using System;
 using System.Collections.Generic;
 
@@ -48,4 +50,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

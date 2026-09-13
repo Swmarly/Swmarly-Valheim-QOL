@@ -1,3 +1,4 @@
+// Response contract shared by add, remove, consume, drop, and move replies.
 namespace SwmarlyValheimQOL {
     public interface IResponse : IPackage {
         int SourceID { get; set; }
@@ -5,4 +6,3 @@ namespace SwmarlyValheimQOL {
         int Amount { get; set; }
     }
 }
-

@@ -1,3 +1,5 @@
+// Narrows the local container-owner compatibility shim to the chest UI update
+// path; native ownership checks remain authoritative everywhere else.
 using System.Diagnostics;
 using HarmonyLib;
 

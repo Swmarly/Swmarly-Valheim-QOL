@@ -1,3 +1,4 @@
+// Requests an authoritative move/reorder within or between inventories.
 namespace SwmarlyValheimQOL {
     public class RequestMove : IRequest {
         public int RequestID { get; set; }
@@ -62,4 +63,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

@@ -1,3 +1,5 @@
+// Speculative inventory snapshot used by the client UI. It provides responsive
+// slot previews without mutating the real inventory before server confirmation.
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -164,4 +166,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

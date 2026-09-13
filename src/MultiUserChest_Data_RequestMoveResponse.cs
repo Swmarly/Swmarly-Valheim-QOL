@@ -1,3 +1,5 @@
+// Result of a move request; the client applies it only when the request ID
+// and success flag match the pending local transaction.
 namespace SwmarlyValheimQOL {
     public class RequestMoveResponse : IPackage, IResponse {
         public int SourceID { get; set; }
@@ -42,4 +44,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

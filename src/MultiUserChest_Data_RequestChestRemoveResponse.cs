@@ -1,3 +1,4 @@
+// Server result for a chest-remove request, including swap-item information.
 namespace SwmarlyValheimQOL {
     public class RequestChestRemoveResponse : IPackage, IResponse {
         public int SourceID { get; set; }
@@ -54,4 +55,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

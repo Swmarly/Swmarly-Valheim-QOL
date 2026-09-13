@@ -1,3 +1,5 @@
+// Reflection helpers isolate optional/private Valheim API access from the
+// protocol code and let the mod tolerate small game-version differences.
 using System;
 using System.Reflection;
 
@@ -28,4 +30,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

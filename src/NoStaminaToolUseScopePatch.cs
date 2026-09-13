@@ -1,3 +1,5 @@
+// Detects the narrow window in which Valheim is executing a tool action. The
+// main stamina patch uses this scope so holding a tool never grants free stamina.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;

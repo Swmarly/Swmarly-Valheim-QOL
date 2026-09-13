@@ -1,3 +1,5 @@
+// Server result for a chest-add request, including any item that must be
+// restored to the player when the requested transfer cannot be completed.
 namespace SwmarlyValheimQOL {
     public class RequestChestAddResponse : IPackage, IResponse {
         public int SourceID { get; set; }
@@ -54,4 +56,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

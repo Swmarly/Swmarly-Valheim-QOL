@@ -1,3 +1,5 @@
+// Server-side RPC router for chest requests. Validation and mutation happen
+// here, on the owner of the container, before a response returns to the UI.
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -250,4 +252,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

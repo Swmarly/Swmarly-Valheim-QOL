@@ -1,3 +1,4 @@
+// Requests an item transfer from a server-owned chest to a player inventory.
 using System;
 
 namespace SwmarlyValheimQOL {
@@ -54,4 +55,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

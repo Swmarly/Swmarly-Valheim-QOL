@@ -1,3 +1,5 @@
+// Inventory method patches that enforce temporary locks, route operations, and
+// prevent native client-side mutations from racing the authoritative server.
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;

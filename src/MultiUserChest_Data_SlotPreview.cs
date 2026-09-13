@@ -1,3 +1,5 @@
+// Local speculative view used by the chest UI while a server request is in
+// flight; it is discarded or reconciled when the authoritative response lands.
 using System.Collections.Generic;
 using System.Linq;
 
@@ -72,4 +74,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

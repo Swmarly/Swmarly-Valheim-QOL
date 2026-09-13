@@ -1,3 +1,4 @@
+// Central logging helper used by static protocol and Harmony patch classes.
 using BepInEx.Logging;
 using UnityEngine;
 
@@ -65,4 +66,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

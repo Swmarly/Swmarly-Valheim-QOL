@@ -1,3 +1,5 @@
+// Client response application and reconciliation for multi-user chest RPCs.
+// This is the boundary where speculative UI state becomes confirmed or rolls back.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -177,4 +179,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

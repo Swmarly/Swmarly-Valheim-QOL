@@ -1,3 +1,4 @@
+// Requests dropping an item from the chest into the world for one player.
 namespace SwmarlyValheimQOL {
     public class RequestDrop : IPackage {
         public readonly Vector2i targetContainerSlot;
@@ -37,4 +38,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

@@ -1,3 +1,5 @@
+// Short-lived per-inventory transaction locks. They prevent a second local
+// action from racing a pending server response and duplicating item changes.
 using System;
 using System.Collections.Generic;
 
@@ -67,4 +69,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

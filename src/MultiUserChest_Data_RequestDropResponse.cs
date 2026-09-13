@@ -1,3 +1,4 @@
+// Result of a chest-drop request, carrying the item and player routing ID.
 namespace SwmarlyValheimQOL {
     public class RequestDropResponse : IPackage, IResponse {
         public int SourceID { get; set; }
@@ -47,4 +48,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

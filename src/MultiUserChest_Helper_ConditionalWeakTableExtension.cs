@@ -1,3 +1,5 @@
+// Small compatibility helper for idempotently attaching owner state to Unity
+// objects without extending their lifetime through a strong reference.
 using System.Runtime.CompilerServices;
 
 namespace SwmarlyValheimQOL {
@@ -7,4 +9,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

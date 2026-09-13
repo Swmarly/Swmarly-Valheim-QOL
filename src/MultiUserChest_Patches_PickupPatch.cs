@@ -1,3 +1,5 @@
+// Pickup guard for inventories involved in a chest transaction; it prevents
+// partial native pickup when one or more destination slots are temporarily locked.
 using System.Linq;
 using HarmonyLib;
 

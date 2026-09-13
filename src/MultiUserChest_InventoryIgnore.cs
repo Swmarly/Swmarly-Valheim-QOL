@@ -1,3 +1,5 @@
+// Opt-out marker for inventories that must remain native and outside the
+// multi-user chest transaction layer (for example temporary/internal views).
 using System.Collections.Generic;
 
 namespace SwmarlyValheimQOL {

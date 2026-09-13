@@ -1,3 +1,4 @@
+// Moves an item from a player inventory into a server-owned chest.
 using System;
 using UnityEngine;
 
@@ -53,4 +54,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

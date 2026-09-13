@@ -1,3 +1,5 @@
+// Hooks player lifecycle events so each local Humanoid inventory gets a stable
+// owner wrapper for requests originating from that player.
 using HarmonyLib;
 
 namespace SwmarlyValheimQOL {

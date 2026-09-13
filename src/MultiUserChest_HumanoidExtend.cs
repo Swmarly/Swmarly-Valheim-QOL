@@ -1,3 +1,5 @@
+// Player-inventory owner bridge. It gives the chest protocol a stable local
+// owner object without changing Valheim's native Humanoid/Inventory classes.
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
@@ -46,4 +48,3 @@ namespace SwmarlyValheimQOL {
         }
     }
 }
-

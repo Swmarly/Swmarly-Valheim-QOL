@@ -1,3 +1,6 @@
+// Main QOL plugin and feature patches. Feature state is server-configured,
+// while client-only movement/UI effects are explicitly limited to local Player.
+// DEVELOPMENT.md documents the lifecycle, multiplayer invariants, and patch map.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -817,6 +820,8 @@ public sealed class Plugin : BaseUnityPlugin
     }
 }
 
+// Floating items: configure Valheim's native Rigidbody buoyancy for networked
+// drops, with a second lifecycle hook for prefabs whose ZNetView arrives late.
 [HarmonyPatch(typeof(ItemDrop), "Awake")]
 internal static class FloatingItemsPatch
 {
@@ -844,6 +849,7 @@ internal static class FloatingItemsPatch
     }
 }
 
+// Complements the Awake hook after network-spawned item components initialize.
 [HarmonyPatch(typeof(ItemDrop), "Start")]
 internal static class FloatingItemsStartPatch
 {
@@ -854,6 +860,7 @@ internal static class FloatingItemsStartPatch
     }
 }
 
+// Shared parser and authority checks for the configurable eternal-light list.
 internal static class EternalFireState
 {
     private static string CachedPrefabConfig;
@@ -907,6 +914,7 @@ internal static class EternalFireState
 // torches, and the other light pieces. Updating the ZDO on its owner makes the
 // result authoritative in multiplayer; clients receive the normal synchronized
 // fuel state and do not need a second custom network protocol.
+// Maintains the synchronized fuel value while the owner updates a fireplace.
 [HarmonyPatch(typeof(Fireplace), nameof(Fireplace.UpdateFireplace))]
 internal static class EternalFireUpdatePatch
 {
@@ -916,6 +924,7 @@ internal static class EternalFireUpdatePatch
     }
 }
 
+// Covers direct/native fuel writes that do not pass through UpdateFireplace.
 [HarmonyPatch(typeof(Fireplace), nameof(Fireplace.SetFuel))]
 internal static class EternalFireSetFuelPatch
 {
@@ -925,6 +934,8 @@ internal static class EternalFireSetFuelPatch
     }
 }
 
+// Tree lifecycle state shared by stump removal and replanting. ZDO flags are
+// durable duplicate guards; instance sets only suppress same-frame callbacks.
 internal static class AutoReplantState
 {
     private const string ReplantScheduledKey = "SwmarlyValheimQOL_ReplantScheduled";
@@ -1108,6 +1119,8 @@ internal static class AutoReplantState
     }
 }
 
+// Runs after native felling has spawned the stump, then removes that stump on
+// its owner so native DropOnDestroyed logs and replanting remain intact.
 [HarmonyPatch(typeof(TreeBase), "SpawnLog")]
 internal static class AutoRemoveTreeStumpPatch
 {
@@ -1117,6 +1130,8 @@ internal static class AutoRemoveTreeStumpPatch
     }
 }
 
+// Observes native stump destruction and schedules the matching sapling before
+// the object disappears from the world.
 [HarmonyPatch(typeof(Destructible), nameof(Destructible.Destroy))]
 internal static class AutoReplantTreePatch
 {
@@ -1131,6 +1146,7 @@ internal static class AutoReplantTreePatch
 // the normal ItemDrop durability fields. Running the same loop used by the
 // established AutoRepair/ValheimPlus implementations from UpdateRepair keeps
 // the crafting-station level checks and all station types intact.
+// Reuses the native repair loop while a local player has an eligible station.
 [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRepair))]
 internal static class AutoRepairAtWorkbenchPatch
 {
@@ -1156,6 +1172,7 @@ internal static class AutoRepairAtWorkbenchPatch
     }
 }
 
+// Preserves queued hotbar equips during sprint without changing sprint costs.
 [HarmonyPatch(typeof(Player), "CheckRun")]
 internal static class EquipWhileRunningPatch
 {
@@ -1196,6 +1213,8 @@ internal static class EquipWhileRunningPatch
 // player's speed down to walk speed for the duration of that animation. Keep
 // the native animation and sprint calculation, but do not let that tag cancel
 // sprinting while the local player is actively holding Run.
+// Removes only the equip-animation slowdown when the local player keeps Run
+// held; the native animation and all remote players remain unchanged.
 [HarmonyPatch(typeof(Player), nameof(Player.InMinorActionSlowdown))]
 internal static class EquipWhileRunningSlowdownPatch
 {
@@ -1217,6 +1236,8 @@ internal static class EquipWhileRunningSlowdownPatch
 // some 1.0 builds. Instead, intercept only IsSwimming calls whose stack is
 // currently inside EquipItem or UpdateEquipment. Movement, stamina, drowning
 // and animation callers still receive the native swimming result.
+// Gives equipment calls a dry-state answer while preserving native swimming
+// state for movement, drowning, stamina, and other Character callers.
 [HarmonyPatch(typeof(Character), nameof(Character.IsSwimming))]
 internal static class EquipmentInWaterSwimmingPatch
 {
@@ -1245,18 +1266,23 @@ internal static class EquipmentInWaterSwimmingPatch
 // them to keep Harmony's equipment patch chain compatible with other mods;
 // target the Valheim 1.0 EquipItem overload explicitly so it cannot become a
 // second ambiguous Harmony target.
+// Explicit overload marker retained for Harmony-chain compatibility.
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.EquipItem), new[] { typeof(ItemDrop.ItemData), typeof(bool) })]
 internal static class EquipmentInWaterEquipCompatibilityPatch
 {
     private static void Prefix() { }
 }
 
+// Explicit UpdateEquipment marker retained for compatibility with companion
+// equipment patches without rewriting Valheim's equipment implementation.
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.UpdateEquipment))]
 internal static class EquipmentInWaterUpdateCompatibilityPatch
 {
     private static void Prefix() { }
 }
 
+// Applies the configured stamina policy at the native cost call. Mode 1 is
+// scoped to actual tool actions; mode 2 is the intentionally broad legacy mode.
 [HarmonyPatch(typeof(Player), "UseStamina")]
 internal static class NoStaminaCostsPatch
 {
@@ -1285,6 +1311,7 @@ internal static class NoStaminaCostsPatch
     }
 }
 
+// Normalized surface categories shared by speed and stamina path modifiers.
 internal enum QolGroundType
 {
     Untamed,
@@ -1295,6 +1322,8 @@ internal enum QolGroundType
     StoneStructure
 }
 
+// Local-player ground sensor and cached path multipliers. Never sample or
+// mutate remote Player instances because dedicated-server clients see all of them.
 internal static class SpeedyPathsState
 {
     private static readonly FieldInfo PaintMaskField = AccessTools.Field(typeof(Heightmap), "m_paintMask");
@@ -1469,6 +1498,8 @@ internal static class SpeedyPathsState
     }
 }
 
+// Samples after native physics contact, avoiding the stale/remote collider
+// state that made path detection fail when players occupied the same area.
 [HarmonyPatch(typeof(Player), "FixedUpdate")]
 internal static class SpeedyPathsUpdatePatch
 {
@@ -1478,6 +1509,7 @@ internal static class SpeedyPathsUpdatePatch
     }
 }
 
+// Temporarily adjusts only the local player's run drain and always restores it.
 [HarmonyPatch(typeof(Player), "CheckRun")]
 internal static class SpeedyPathsStaminaPatch
 {
@@ -1494,6 +1526,7 @@ internal static class SpeedyPathsStaminaPatch
     }
 }
 
+// Applies the cached path speed factor to local jogging only.
 [HarmonyPatch(typeof(Player), "GetJogSpeedFactor")]
 internal static class SpeedyPathsJogPatch
 {
@@ -1504,6 +1537,7 @@ internal static class SpeedyPathsJogPatch
     }
 }
 
+// Applies the cached path speed factor to local running only.
 [HarmonyPatch(typeof(Player), "GetRunSpeedFactor")]
 internal static class SpeedyPathsRunPatch
 {
@@ -1514,6 +1548,7 @@ internal static class SpeedyPathsRunPatch
     }
 }
 
+// Server-only AFK tracking based on authoritative character ZDO positions.
 internal static class NoAfkRaidsState
 {
     private readonly struct Activity
@@ -1650,6 +1685,8 @@ internal static class NoAfkRaidsState
     }
 }
 
+// Blocks only server-side random-event selection when every eligible player is
+// AFK according to the configured time, movement, and radius rules.
 [HarmonyPatch(typeof(RandEventSystem), "SetRandomEvent")]
 internal static class NoAfkRaidsPatch
 {
@@ -1659,6 +1696,8 @@ internal static class NoAfkRaidsPatch
     }
 }
 
+// Removes uncovered-roof rain wear at initialization without disabling other
+// structural WearNTear behavior.
 [HarmonyPatch(typeof(WearNTear), "Awake")]
 internal static class NoRainDamagePatch
 {
@@ -1668,6 +1707,7 @@ internal static class NoRainDamagePatch
     }
 }
 
+// Reasserts the narrow rain-wear flag during native wear calculation.
 [HarmonyPatch(typeof(WearNTear), "UpdateWear")]
 internal static class NoRainDamageUpdatePatch
 {
@@ -1679,6 +1719,8 @@ internal static class NoRainDamageUpdatePatch
     }
 }
 
+// Local per-frame skill/UI-independent QOL updates: sneak speed and other
+// player-local timers that must not read remote input or mutate remote state.
 [HarmonyPatch(typeof(Player), "Update")]
 internal static class PlayerQolUpdatePatch
 {
@@ -1703,6 +1745,8 @@ internal static class PlayerQolUpdatePatch
     }
 }
 
+// Applies swim speed and stationary-water regeneration after native swimming
+// state is known, limited to the local player.
 [HarmonyPatch(typeof(Character), "UpdateSwimming")]
 internal static class SwimImprovementsPatch
 {
@@ -1721,6 +1765,8 @@ internal static class SwimImprovementsPatch
     }
 }
 
+// Sends at most one local sit-heal per real-time second and clears stale state
+// when the player stops sitting, dies, or reaches full health.
 [HarmonyPatch(typeof(Player), "FixedUpdate")]
 internal static class SitRegenerationFixedPatch
 {
@@ -1758,6 +1804,8 @@ internal static class SitRegenerationFixedPatch
     }
 }
 
+// Core local diving state machine: keeps the native swimmer alive at a target
+// depth and releases cleanly when the player reaches land or dies.
 [HarmonyPatch(typeof(Character), "CustomFixedUpdate")]
 internal static class DivingPatch
 {
@@ -1973,6 +2021,8 @@ internal static class DivingPatch
 // dive is still a swim state even during that transient timer gap; return true
 // for the native state query until the player intentionally surfaces or leaves
 // the water volume.
+// Keeps native state queries consistent during the controlled local dive while
+// allowing remote characters and ordinary surface swimming to remain native.
 [HarmonyPatch(typeof(Character), nameof(Character.IsSwimming))]
 internal static class DivingNativeSwimmingStatePatch
 {
@@ -1999,6 +2049,8 @@ internal static class DivingNativeSwimmingStatePatch
 // Input edge detection belongs in Player.Update. Reading GetButtonDown from a
 // fixed-update patch can miss the one rendered frame in which the button was
 // pressed, especially when the server/client frame and physics rates differ.
+// Reads dive-button edges in render Update, where GetButtonDown cannot be lost
+// between fixed physics ticks and a dedicated server's client frame rate.
 [HarmonyPatch(typeof(Player), "Update")]
 internal static class DivingInputPatch
 {
@@ -2023,6 +2075,8 @@ internal static class DivingInputPatch
     }
 }
 
+// Prevents native motion from expiring the local underwater swim timer and
+// launching the player while the selected dive depth is still submerged.
 [HarmonyPatch(typeof(Character), "UpdateMotion")]
 internal static class DivingMotionPatch
 {
@@ -2063,6 +2117,7 @@ internal static class DivingMotionPatch
 // builds. Reasserting the native timers here prevents that later method from
 // expiring the swim timer and applying the surface impulse while the target
 // depth is already underwater.
+// Reasserts swim timers after native UpdateSwimming runs on Valheim 1.0 builds.
 [HarmonyPatch(typeof(Character), "UpdateSwimming")]
 internal static class DivingSwimmingTimerPatch
 {
@@ -2079,6 +2134,8 @@ internal static class DivingSwimmingTimerPatch
     }
 }
 
+// Adjusts only the local camera's water-plane limits and restores originals on
+// non-local camera/player states, so remote players are never affected.
 [HarmonyPatch(typeof(GameCamera), "UpdateCamera")]
 internal static class DivingCameraPatch
 {
@@ -2129,6 +2186,8 @@ internal static class DivingCameraPatch
     }
 }
 
+// Converts coin drops into the player's synchronized pocket balance and marks
+// the drop before crediting it so repeated pickup callbacks cannot double-pay.
 [HarmonyPatch(typeof(Humanoid), "Pickup")]
 internal static class CurrencyPickupPatch
 {
@@ -2167,6 +2226,8 @@ internal static class CurrencyPickupPatch
     }
 }
 
+// Delimits native AutoPickup so a coin can bypass inventory capacity only in
+// that one pickup context; normal item capacity rules remain untouched.
 [HarmonyPatch(typeof(Player), "AutoPickup")]
 internal static class CurrencyAutoPickupContextPatch
 {
@@ -2183,6 +2244,8 @@ internal static class CurrencyAutoPickupContextPatch
     }
 }
 
+// Capacity exception paired with CurrencyAutoPickupContextPatch; it never
+// applies to manual adds or non-coin items.
 [HarmonyPatch(typeof(Inventory), "CanAddItem", typeof(ItemDrop.ItemData), typeof(int))]
 internal static class CurrencyAutoPickupCapacityPatch
 {
@@ -2194,6 +2257,8 @@ internal static class CurrencyAutoPickupCapacityPatch
     }
 }
 
+// Makes the trader's native total include the pocket without creating a fake
+// inventory stack that could be lost or duplicated by other inventory code.
 [HarmonyPatch(typeof(StoreGui), "GetPlayerCoins")]
 internal static class CurrencyStorePatch
 {
@@ -2203,6 +2268,8 @@ internal static class CurrencyStorePatch
     }
 }
 
+// Handles only mixed/pocket-funded purchases. Inventory-only purchases stay on
+// Valheim's native debit path; this prefix debits the pocket remainder exactly once.
 [HarmonyPatch(typeof(StoreGui), "BuySelectedItem")]
 internal static class CurrencyStorePurchasePatch
 {
@@ -2248,6 +2315,7 @@ internal static class CurrencyStorePurchasePatch
     }
 }
 
+// Creates and positions the pocket UI when the inventory screen opens.
 [HarmonyPatch(typeof(InventoryGui), "Show")]
 internal static class CurrencyUiPatch
 {
@@ -2261,6 +2329,7 @@ internal static class CurrencyUiPatch
     }
 }
 
+// Creates the UI early enough for other layout patches to discover the pocket.
 [HarmonyPatch(typeof(InventoryGui), "Awake")]
 internal static class CurrencyUiAwakePatch
 {
@@ -2273,6 +2342,7 @@ internal static class CurrencyUiAwakePatch
 // Show/Awake can run before another UI mod finishes rebuilding the inventory.
 // Retry only while the pocket is missing; this is cheap and makes the UI
 // recover after inventory-layout changes and world/player transitions.
+// Reconciles the pocket UI after inventory-layout mods rebuild the hierarchy.
 [HarmonyPatch(typeof(InventoryGui), "Update")]
 internal static class CurrencyUiRecoveryPatch
 {
@@ -2287,6 +2357,7 @@ internal static class CurrencyUiRecoveryPatch
     }
 }
 
+// Registers sleep-vote RPCs once per ZRoutedRpc instance on server and clients.
 [HarmonyPatch(typeof(Game), "Start")]
 internal static class SleepRpcRegistrationPatch
 {
@@ -2306,6 +2377,8 @@ internal static class SleepRpcRegistrationPatch
     }
 }
 
+// Routed sleep-vote messages and client display state. The server remains the
+// only authority that records votes and decides when the night can be skipped.
 internal static class SleepRpc
 {
     internal static void OpenPopup(long sender)
@@ -2384,6 +2457,8 @@ internal static class SleepRpc
     }
 }
 
+// Replaces only the server's final sleep decision with the configured vote
+// policy; clients continue using the native question as a fallback.
 [HarmonyPatch(typeof(Game), "EverybodyIsTryingToSleep")]
 internal static class SleepSkipPatch
 {

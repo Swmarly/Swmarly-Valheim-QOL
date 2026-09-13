@@ -1,3 +1,4 @@
+// Result of a consume request, returned after the server changes inventory.
 namespace SwmarlyValheimQOL {
     public class RequestConsumeResponse : IPackage, IResponse {
         public int SourceID { get; set; }
@@ -43,4 +44,3 @@ namespace SwmarlyValheimQOL {
 #endif
     }
 }
-

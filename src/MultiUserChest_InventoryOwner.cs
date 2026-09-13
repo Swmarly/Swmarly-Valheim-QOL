@@ -1,3 +1,5 @@
+// Abstract owner model shared by chest and player inventory wrappers. Every
+// request uses this model to locate the correct ZNetView and authoritative peer.
 
 namespace SwmarlyValheimQOL {
     public abstract class InventoryOwner {
@@ -71,4 +73,3 @@ namespace SwmarlyValheimQOL {
         public override Inventory Inventory => inventory;
     }
 }
-
